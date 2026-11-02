@@ -18,7 +18,6 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
-# Словарь для хранения состояний: user_id -> {"state": "...", "target_id": ...}
 USER_STATES = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -28,11 +27,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я — бот для поддержания серии огонька.\n\n"
         "📌 <b>Инструкция:</b>\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier, перешли мне сообщение от друга и введи его @username.\n"
+        "2. Напиши /faier и следуй инструкциям.\n"
         "3. Друг получит приглашение с кнопкой «Принять».\n"
-        "4. В 00:00 ЕКБ я пришлю кнопку «Поддержать огонек». Нажать должны оба.\n"
-        "5. Восстановление: 3 раза бесплатно, потом 25 ⭐.\n\n"
-        "⚠️ <b>Важно:</b> без Business-подключения я не смогу писать от твоего имени.",
+        "4. В 00:00 ЕКБ я пришлю кнопку «Поддержать огонек».",
         parse_mode="HTML"
     )
 
@@ -46,76 +43,76 @@ async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка: Бот не подключен в Business-режиме!")
         return
 
-    USER_STATES[user.id] = {"state": "waiting_forward"}
+    USER_STATES[user.id] = {"state": "waiting_reply"}
     await update.message.reply_text(
-        "👤 <b>Шаг 1:</b> Перешли мне любое сообщение от друга (за последние 24 часа).\n"
-        "Это нужно, чтобы Telegram разрешил мне отправить ему приглашение.",
+        "👤 <b>Шаг 1:</b> Сделай свайп влево по <b>любому сообщению друга</b> в вашем чате и ответь на него (напиши что угодно, например «Привет»).\n\n"
+        "Затем перешли это сообщение сюда.",
         parse_mode="HTML"
     )
 
-# Обработка пересланного сообщения для получения ID
-async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    state = USER_STATES.get(user.id, {}).get("state")
-    
-    if state != "waiting_forward":
-        return
-        
-    msg = update.message
-    if not msg.forward_from:
-        await msg.reply_text("❌ Ошибка: это не пересланное сообщение или у друга скрыт аккаунт. Попроси его отправить тебе сообщение и перешли именно его.")
-        return
-
-    target_id = msg.forward_from.id
-    target_name = msg.forward_from.first_name
-    
-    # Сохраняем ID и ждем username
-    USER_STATES[user.id] = {"state": "waiting_username", "target_id": target_id, "target_name": target_name}
-    
-    await msg.reply_text(
-        f"✅ ID друга ({target_name}) получен!\n\n"
-        f"<b>Шаг 2:</b> Теперь введи его @username (например: @ivan_petrov).",
-        parse_mode="HTML"
-    )
-
-# Обработка ввода текста (username)
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Обработка сообщений (ждем ответ на сообщение друга)
+async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     state_data = USER_STATES.get(user.id)
     
-    if not state_data or state_data.get("state") != "waiting_username":
+    if not state_data:
         return
+
+    if state_data.get("state") == "waiting_reply":
+        msg = update.message
+        # Проверяем, есть ли reply_to_message (на кого ответили)
+        if not msg.reply_to_message:
+            await msg.reply_text("❌ Ты не ответил на сообщение друга. Сделай свайп по его сообщению и ответь.")
+            return
+            
+        # Получаем данные того, на кого ответили
+        replied_user = msg.reply_to_message.from_user
         
-    text = update.message.text.strip()
-    if not text.startswith("@"):
-        await update.message.reply_text("❌ Введи корректный @username (начинается с @).")
-        return
+        # Если ответили сами себе или боту - ошибка
+        if replied_user.id == user.id or replied_user.is_bot:
+            await msg.reply_text("❌ Это твое сообщение или бот. Ответь на сообщение друга.")
+            return
 
-    target_id = state_data["target_id"]
-    target_username = text[1:]
-    USER_STATES.pop(user.id, None) # Сбрасываем состояние
-
-    conn_id = db.get_connection(user.id)
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
-         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
-    ])
-    
-    try:
-        # Отправляем сообщение другу ОТ ИМЕНИ ПОЛЬЗОВАТЕЛЯ (используем числовой ID!)
-        await context.bot.send_message(
-            chat_id=target_id, 
-            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже, чтобы начать серию.",
-            parse_mode="HTML",
-            reply_markup=keyboard,
-            business_connection_id=conn_id
+        target_id = replied_user.id
+        target_name = replied_user.first_name
+        
+        USER_STATES[user.id] = {"state": "waiting_username", "target_id": target_id, "target_name": target_name}
+        
+        await msg.reply_text(
+            f"✅ ID друга ({target_name}) получен!\n\n"
+            f"<b>Шаг 2:</b> Введи его @username (например: @ivan_petrov).",
+            parse_mode="HTML"
         )
-        await update.message.reply_text("✅ Приглашение успешно отправлено другу!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка отправки: {e}")
 
-# ==================== КНОПКИ ====================
+    elif state_data.get("state") == "waiting_username":
+        text = update.message.text.strip()
+        if not text.startswith("@"):
+            await update.message.reply_text("❌ Введи корректный @username (начинается с @).")
+            return
+
+        target_id = state_data["target_id"]
+        USER_STATES.pop(user.id, None) # Сбрасываем
+
+        conn_id = db.get_connection(user.id)
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
+             InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
+        ])
+        
+        try:
+            await context.bot.send_message(
+                chat_id=target_id, 
+                text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                business_connection_id=conn_id
+            )
+            await update.message.reply_text("✅ Приглашение успешно отправлено другу!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
+
+# ==================== КНОПКИ И ОСТАЛЬНАЯ ЛОГИКА ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -124,18 +121,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     if data.startswith("acc_"):
-        # acc_ОТПРАВИТЕЛЬID_ПОЛУЧАТЕЛЬID
         parts = data.split("_")
         initiator_id = int(parts[1])
         receiver_id = int(parts[2])
         
-        # Нам нужно найти chat_id. Это личный чат между инициатором и получателем.
-        # В Telegram Business API chat_id диалога = user_id собеседника.
         chat_id = receiver_id 
-        
         conn_id = db.get_connection(initiator_id)
         
-        # ВАЖНО: для базы данных user_a и user_b это ID участников
         db.create_streak(chat_id, conn_id, initiator_id, receiver_id)
         
         await query.edit_message_text(
@@ -181,8 +173,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if db.restore_streak(chat_id, paid=False):
             await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
 
-# ==================== ПЛАТЕЖИ (ЗВЕЗДЫ) ====================
-
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
@@ -193,10 +183,7 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         db.restore_streak(chat_id, paid=True)
         await update.message.reply_text("🔥 <b>Огонек восстановлен за 25 ⭐!</b>", parse_mode="HTML")
 
-# ==================== CRON ЗАДАЧИ ====================
-
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
-    """00:00 ЕКБ - гасим огоньки и кидаем кнопки"""
     streaks = db.get_all_streaks()
     for s in streaks:
         if s["is_gray"] == 1:
@@ -216,10 +203,8 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed midnight: {e}")
 
 async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
-    """Каждые 2 часа напоминаем про серые огоньки и даем кнопку восстановить"""
     streaks = db.get_unsent_reminders()
     for s in streaks:
-        # Проверка на сгорание (7 дней)
         gray_since = datetime.fromisoformat(s["gray_since"])
         if datetime.now(TZ_EKB) - gray_since > timedelta(days=7):
             db.kill_streak(s["chat_id"])
@@ -233,7 +218,6 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             except: pass
             continue
 
-        # Если не сгорел, напоминаем
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")],
             [InlineKeyboardButton("♻️ Восстановить", callback_data=f"restore_{s['chat_id']}")]
@@ -250,13 +234,10 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed remind: {e}")
 
-# ==================== ЗАПУСК ====================
-
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
         db.save_connection(conn.user.id, conn.id)
-        logger.info(f"Business connection saved: user={conn.user.id}")
 
 def main():
     db.init_db()
@@ -265,20 +246,16 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("faier", faier))
     
-    # Обработка пересланных сообщений
-    app.add_handler(MessageHandler(filters.FORWARDED & filters.ChatType.PRIVATE, handle_forwarded_message))
-    # Обработка остального текста
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_text_input))
+    # Теперь обрабатываем ВСЕ текстовые сообщения (и ответы) через одну функцию
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message_input))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # Планировщик
     jq = app.job_queue
     jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
-    # Напоминания каждые 2 часа (начиная с 2 часов)
     jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
 
     PORT = int(os.environ.get("PORT", 10000))
