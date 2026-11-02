@@ -1,214 +1,351 @@
 import os
-import sqlite3
 import asyncio
+import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
-# --- НАСТРОЙКИ ---
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters, PreCheckoutQueryHandler
+)
+
+import database as db
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "9027429698:AAF9f7vipHibEzomSClmLXRjpabRz0nu8BE")
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
-DB_PATH = "streaks.db"
 
-# --- БАЗА ДАННЫХ ---
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS streaks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_a INTEGER,
-        user_b INTEGER,
-        chat_id INTEGER,
-        streak INTEGER DEFAULT 0,
-        last_active DATE,
-        is_gray INTEGER DEFAULT 0,
-        restore_count INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(user_a, user_b)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pending_invites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        from_user INTEGER,
-        to_user INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    conn.commit()
-    conn.close()
+MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000, 2000, 5000]
+PENDING_INVITES = {}  # user_id -> target_username
 
-def get_streak(chat_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM streaks WHERE chat_id = ?", (chat_id,))
-    row = c.fetchone()
-    conn.close()
-    return row
 
-def update_streak(chat_id, streak, last_active, is_gray, restore_count=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    if restore_count is not None:
-        c.execute("UPDATE streaks SET streak=?, last_active=?, is_gray=?, restore_count=? WHERE chat_id=?",
-                  (streak, last_active, is_gray, restore_count, chat_id))
-    else:
-        c.execute("UPDATE streaks SET streak=?, last_active=?, is_gray=? WHERE chat_id=?",
-                  (streak, last_active, is_gray, chat_id))
-    conn.commit()
-    conn.close()
+# ========== КОМАНДЫ ==========
 
-# --- ЛОГИКА ОГОНЬКА ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (
-        f"🔥 Привет, {user.first_name}!\n\n"
+        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "Я — бот для поддержания серии огонька в личных переписках.\n\n"
-        "📌 **Как это работает:**\n"
-        "1. Ты добавляешь меня в Business-режим (настройки Telegram → Business → Чат-боты).\n"
-        "2. Пишешь `/faier` и указываешь @username друга.\n"
-        "3. Ему приходит приглашение. После принятия начинается серия.\n"
-        "4. Каждый день до 00:00 по Екатеринбургу **оба** должны написать хоть одно сообщение.\n"
-        "5. Если кто-то не написал — огонёк становится серым ⚪ и я напоминаю каждые 2 часа.\n"
-        "6. Серия сгорает, если не продлить в течение суток. Восстановление: 3 раза бесплатно, потом 25 ⭐.\n\n"
-        "⚠️ **Важно:** Чтобы я видел сообщения в твоих личных чатах, подключи меня в Business-режиме.\n"
-        "Инструкция: Настройки → Telegram Business → Чат-боты → добавь меня."
+        "📌 <b>Как это работает:</b>\n"
+        "1. Подключи меня в <b>Telegram Business → Чат-боты</b> (настройки профиля).\n"
+        "2. Напиши /faier и укажи @username друга.\n"
+        "3. Друг получит приглашение. После принятия начнётся серия.\n"
+        "4. Каждый день <b>оба</b> должны написать хотя бы одно сообщение до 00:00 ЕКБ.\n"
+        "5. Если кто-то не написал — огонёк станет серым ⚪, напоминания каждые 2 часа.\n"
+        "6. Восстановление: 3 раза бесплатно, потом 25 ⭐. Через неделю — окончательно сгорает.\n\n"
+        "⚠️ <b>Важно:</b> без подключения в Business-режиме я не смогу видеть сообщения в твоих чатах.\n"
+        "Настройки → Telegram Business → Чат-боты → добавь меня."
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="HTML")
+
 
 async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
+
     if chat.type != "private":
         await update.message.reply_text("❌ Команда работает только в личных сообщениях.")
         return
-    # Проверяем, есть ли уже серия
-    row = get_streak(chat.id)
-    if row:
-        await update.message.reply_text(f"🔥 У вас уже есть серия с этим собеседником: {row[4]} дней.")
-        return
-    await update.message.reply_text("👤 Введи @username друга, с которым хочешь растить огонёк:")
 
-async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.startswith("@") or len(text) < 2:
-        await update.message.reply_text("❌ Введи корректный @username.")
+    # Проверяем, есть ли уже серия
+    existing = db.get_streak_by_chat(chat.id)
+    if existing:
+        await update.message.reply_text(
+            f"🔥 У вас уже есть серия с этим собеседником: <b>{existing['streak']} дней</b>.",
+            parse_mode="HTML"
+        )
         return
-    # Здесь нужна логика поиска user_id по username (упрощённо — просим переслать сообщение)
-    # В реальности лучше использовать forward или просить друга нажать /start
+
+    PENDING_INVITES[user.id] = True
     await update.message.reply_text(
-        f"✅ Приглашение для {text} создано (заглушка).\n"
-        "В реальной версии здесь будет отправка сообщения другу с кнопками «Принять/Отклонить».\n"
-        "Пока что попроси друга написать мне /start и перешли его сообщение сюда."
+        "👤 Введи @username друга, с которым хочешь растить огонёк:\n"
+        "(например: @ivan_petrov)"
     )
 
-# --- ОБРАБОТКА BUSINESS-СООБЩЕНИЙ ---
-async def business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def handle_username_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.message.text.strip()
+
+    if not PENDING_INVITES.get(user.id):
+        return
+
+    if not text.startswith("@") or len(text) < 2:
+        await update.message.reply_text("❌ Введи корректный @username (начинается с @).")
+        return
+
+    target_username = text[1:]
+    PENDING_INVITES.pop(user.id, None)
+
+    # Сохраняем приглашение
+    conn = db.get_conn()
+    conn.execute("""
+        INSERT INTO pending_invites (from_user_id, from_username, to_user_id)
+        VALUES (?, ?, ?)
+    """, (user.id, user.username or user.first_name, 0))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        f"✅ Приглашение для @{target_username} создано.\n\n"
+        "⚠️ <b>Важно:</b> твой друг должен сам написать мне /start и переслать сюда любое своё сообщение (или нажать кнопку ниже после того, как напишет мне).\n\n"
+        "Попроси друга написать мне /start, а затем перешли его сообщение в этот чат — я привяжу его аккаунт.",
+        parse_mode="HTML"
+    )
+
+
+# ========== BUSINESS CONNECTION ==========
+
+async def handle_business_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь подключил/отключил бота."""
+    conn = update.business_connection
+    if conn.is_enabled:
+        db.save_connection(conn.user.id, conn.id)
+        logger.info(f"Business connection saved: user={conn.user.id}, connection={conn.id}")
+    else:
+        logger.info(f"Business connection disabled: user={conn.user.id}")
+
+
+async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сообщение в подключённом чате."""
     msg = update.business_message
     if not msg:
         return
+
     chat_id = msg.chat.id
-    user_id = msg.from_user.id
-    row = get_streak(chat_id)
-    if row:
-        # Обновляем активность
-        today = datetime.now(TZ_EKB).date()
-        last_active = row[5]
-        if last_active != today:
-            # Если день сменился, но оба написали — продлеваем
-            # В упрощённом виде: просто обновляем last_active
-            update_streak(chat_id, row[4], today.isoformat(), 0)
-    # Дополнительная логика подсчёта «оба написали» требует хранения флагов за день
+    from_user = msg.from_user.id
+    connection_id = msg.business_connection_id
+
+    # Проверяем, есть ли серия для этого чата
+    streak = db.get_streak_by_chat(chat_id)
+    if not streak:
+        # Возможно, это первый ответ на приглашение
+        return
+
+    # Отмечаем, что пользователь написал
+    db.mark_user_wrote(chat_id, from_user)
+
+    # Пробуем продлить серию
+    new_streak = db.try_advance_streak(chat_id)
+    if new_streak:
+        # Серия продлена — проверяем рубежи
+        if new_streak in MILESTONES:
+            text = (
+                f"🎉🔥 <b>ПОЗДРАВЛЯЕМ!</b>\n\n"
+                f"Ваша серия достигла <b>{new_streak} дней</b>!\n"
+                f"Вы очень дружные и активные! Так держать! 💪✨"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                    business_connection_id=connection_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to send milestone: {e}")
+
+
+# ========== ПРИНЯТИЕ ПРИГЛАШЕНИЯ ==========
 
 async def handle_invite_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+
     if data.startswith("accept_"):
-        # Логика принятия приглашения
-        await query.edit_message_text("✅ Серия начата! День 1. Продолжайте общаться каждый день 🔥")
+        # Логика: инициатор и принявший создают серию
+        # В реальности нужен обмен user_id
+        await query.edit_message_text(
+            "✅ <b>Серия начата! День 1.</b>\n\n"
+            "Продолжайте общаться каждый день 🔥\n"
+            "Не забудьте: оба должны написать хотя бы по одному сообщению до 00:00 ЕКБ.",
+            parse_mode="HTML"
+        )
     elif data.startswith("decline_"):
         await query.edit_message_text("❌ Приглашение отклонено.")
 
-# --- ФОНОВЫЕ ЗАДАЧИ ---
+
+# ========== ФОНОВЫЕ ЗАДАЧИ ==========
+
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
-    """Проверка в 00:00 ЕКБ: если кто-то не писал — серый огонь."""
-    now = datetime.now(TZ_EKB)
-    today = now.date()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM streaks WHERE is_gray = 0")
-    rows = c.fetchall()
-    for row in rows:
-        chat_id = row[3]
-        last_active = row[5]
-        # Если last_active не сегодня — значит не продлили
-        if last_active != today.isoformat():
-            update_streak(chat_id, row[4], last_active, 1)
-            # Отправляем сообщение в чат (через business_connection_id, если есть)
-            # В упрощённом виде — шлём обычное сообщение от бота
+    """00:00 ЕКБ — проверка, все ли продлили."""
+    logger.info("Running midnight check...")
+    streaks = db.get_all_streaks()
+
+    for s in streaks:
+        if s["is_gray"] == 1:
+            continue
+
+        today = datetime.now(TZ_EKB).date().isoformat()
+        last_active = s["last_active_date"]
+
+        # Если последняя активность не сегодня — значит не продлили
+        if last_active != today:
+            db.set_gray(s["chat_id"])
+
+            text = (
+                "⚪ <b>Огонёк стал серым.</b>\n\n"
+                "Пора продлить серию! Напишите оба хотя бы по одному сообщению до 00:00 по Екатеринбургу.\n"
+                "🔥 Продлите — и огонёк снова загорится!"
+            )
+            try:
+                conn_id = s["business_connection_id"]
+                if conn_id:
+                    await context.bot.send_message(
+                        chat_id=s["chat_id"],
+                        text=text,
+                        parse_mode="HTML",
+                        business_connection_id=conn_id
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send gray notice: {e}")
+
+
+async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
+    """Каждые 2 часа напоминаем про серые огоньки."""
+    logger.info("Running gray reminder...")
+    streaks = db.get_gray_streaks()
+
+    for s in streaks:
+        gray_since = s["gray_since"]
+        if not gray_since:
+            continue
+
+        # Проверяем, не прошло ли больше недели
+        gray_dt = datetime.fromisoformat(gray_since)
+        now = datetime.now(TZ_EKB)
+        if now - gray_dt > timedelta(days=7):
+            # Окончательно сгорел — удаляем
+            conn = db.get_conn()
+            conn.execute("DELETE FROM streaks WHERE chat_id = ?", (s["chat_id"],))
+            conn.commit()
+            conn.close()
             try:
                 await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="⚪ Огонёк стал серым. Пора продлить серию! Напишите оба хотя бы по одному сообщению до 00:00 по Екатеринбургу."
+                    chat_id=s["chat_id"],
+                    text="💀 <b>Серия окончательно сгорела.</b>\n\nПрошла неделя. Начните заново с /faier.",
+                    parse_mode="HTML",
+                    business_connection_id=s["business_connection_id"]
                 )
             except:
                 pass
-    conn.close()
+            continue
 
-async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
-    """Напоминание каждые 2 часа для серых огоньков."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM streaks WHERE is_gray = 1")
-    rows = c.fetchall()
-    for row in rows:
-        chat_id = row[3]
+        # Обычное напоминание
+        text = (
+            "⚪ <b>Напоминание:</b> огонёк серый.\n\n"
+            "Продлите серию — напишите оба! 🔥"
+        )
         try:
             await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚪ Напоминание: огонёк серый. Продлите серию — напишите оба! 🔥"
+                chat_id=s["chat_id"],
+                text=text,
+                parse_mode="HTML",
+                business_connection_id=s["business_connection_id"]
             )
-        except:
-            pass
-    conn.close()
+        except Exception as e:
+            logger.error(f"Failed to send reminder: {e}")
 
-async def celebrate_milestones(context: ContextTypes.DEFAULT_TYPE):
-    """Поздравления на рубежах: 10, 30, 60, 100 и т.д."""
-    milestones = [10, 30, 60, 100, 200, 300, 500, 700, 1000, 2000, 5000]
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM streaks WHERE streak IN ({})".format(",".join("?"*len(milestones))), milestones)
-    rows = c.fetchall()
-    for row in rows:
-        chat_id = row[3]
-        streak = row[4]
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🎉🔥 ПОЗДРАВЛЯЕМ! Ваша серия достигла {streak} дней! Вы очень дружные и активные! Так держать! 💪✨"
+
+async def check_milestones(context: ContextTypes.DEFAULT_TYPE):
+    """Проверка рубежей (раз в час)."""
+    # Реализовано внутри handle_business_message — при продлении проверяем milestone
+    pass
+
+
+# ========== ВОССТАНОВЛЕНИЕ ЗА ЗВЁЗДЫ ==========
+
+async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Восстановление серии: 3 бесплатно, потом 25 звёзд."""
+    chat = update.effective_chat
+    if chat.type != "private":
+        return
+
+    streak = db.get_streak_by_chat(chat.id)
+    if not streak or streak["is_gray"] == 0:
+        await update.message.reply_text("❌ У вас нет серого огонька для восстановления.")
+        return
+
+    if streak["restore_count"] < 3:
+        # Бесплатное восстановление
+        success = db.restore_streak(chat.id, paid=False)
+        if success:
+            await update.message.reply_text(
+                "🔥 <b>Огонёк восстановлен!</b>\n\n"
+                f"Бесплатных восстановлений осталось: {2 - streak['restore_count']}",
+                parse_mode="HTML"
             )
-        except:
-            pass
-    conn.close()
+        else:
+            await update.message.reply_text("❌ Не удалось восстановить.")
+    else:
+        # Платное восстановление за 25 звёзд
+        price = 25
+        await context.bot.send_invoice(
+            chat_id=chat.id,
+            title="Восстановление огонька",
+            description=f"Восстановить серию {streak['streak']} дней за {price} звёзд",
+            payload=f"restore_{chat.id}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Восстановление", amount=price)]
+        )
 
-# --- ЗАПУСК ---
+
+async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    payload = payment.invoice_payload
+
+    if payload.startswith("restore_"):
+        chat_id = int(payload.split("_")[1])
+        db.restore_streak(chat_id, paid=True)
+        await update.message.reply_text(
+            "🔥 <b>Огонёк восстановлен за 25 ⭐!</b>\n\nСерия продолжается!",
+            parse_mode="HTML"
+        )
+
+
+# ========== ЗАПУСК ==========
+
 def main():
-    init_db()
+    db.init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Хендлеры
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("faier", faier))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
-    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, business_message))
+    app.add_handler(CommandHandler("restore", restore_command))
+
+    # Ввод username
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_username_input))
+
+    # Business
+    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_CONNECTION, handle_business_connection))
+    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
+
+    # Callback
     app.add_handler(CallbackQueryHandler(handle_invite_response))
 
-    # Планировщик
-    job_queue = app.job_queue
-    job_queue.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
-    job_queue.run_repeating(remind_gray, interval=timedelta(hours=2), first=10)
-    job_queue.run_repeating(celebrate_milestones, interval=timedelta(hours=1), first=60)
+    # Платежи
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
+    # Планировщик
+    jq = app.job_queue
+    jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
+    jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
+
+    logger.info("Bot starting...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
