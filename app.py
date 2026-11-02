@@ -25,7 +25,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier и введи числовой ID друга.\n"
+        "2. Напиши /faier и введи ID друга.\n"
         "3. Друг получит приглашение.",
         parse_mode="HTML"
     )
@@ -56,7 +56,8 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     USER_STATES.pop(user.id, None)
     conn_id = db.get_connection(user.id)
 
-    # ЖЕСТКАЯ ОТПРАВКА ПО ID (как в рабочей версии)
+    # ОТПРАВЛЯЕМ СООБЩЕНИЕ ОТ ИМЕНИ САМОГО БОТА (без business_connection_id)
+    # Это создаст диалог, и Telegram не заблокирует его.
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
@@ -65,15 +66,15 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         await context.bot.send_message(
             chat_id=target_id, 
-            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
-            parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
+            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже, чтобы начать:",
+            parse_mode="HTML", reply_markup=keyboard
+            # Убрали business_connection_id! Отправляем от имени бота
         )
-        await update.message.reply_text("✅ Приглашение успешно отправлено!")
+        await update.message.reply_text("✅ Приглашение отправлено другу!")
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
-# --- Заглушка для бизнес-сообщений, чтобы не было конфликтов ---
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
 
@@ -86,11 +87,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("acc_"):
         parts = data.split("_")
         initiator_id, receiver_id = int(parts[1]), int(parts[2])
-        chat_id = receiver_id 
+        chat_id = query.message.chat.id 
+        
         conn_id = db.get_connection(initiator_id)
         db.create_streak(chat_id, conn_id, initiator_id, receiver_id)
-        await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>", parse_mode="HTML")
         
+        await query.edit_message_text(
+            "🔥 <b>Серия начата! День 1.</b>\n\n"
+            "В 00:00 ЕКБ я пришлю кнопку, чтобы продлить огонек.",
+            parse_mode="HTML"
+        )
+        
+        # А вот ТЕПЕРЬ пишем от имени инициатора (диалог уже создан, ошибки не будет)
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔥 <b>Наш огонек зажжен! День 1.</b>\n\nНе забывайте общаться и продлевать серию каждый день.",
+                parse_mode="HTML",
+                business_connection_id=conn_id
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить авто-сообщение: {e}")
+
     elif data.startswith("dec_"):
         await query.edit_message_text("❌ Приглашение отклонено.")
 
