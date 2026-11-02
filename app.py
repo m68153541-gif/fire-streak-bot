@@ -35,8 +35,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в Business-режиме.\n"
-        "2. Напиши /faier.\n"
-        "3. Введи ID друга.",
+        "2. Попроси друга написать тебе в ЛС (чтобы я его увидел).\n"
+        "3. Напиши /faier и введи ID друга.",
         parse_mode="HTML", reply_markup=keyboard
     )
 
@@ -64,7 +64,6 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     USER_STATES.pop(user.id, None)
     conn_id = db.get_connection(user.id)
 
-    # Берем chat_id из базы (сохранен из бизнес-сообщения друга)
     chat_id = db.get_chat_id(user.id, target_id)
     
     if not chat_id:
@@ -78,7 +77,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     
     try:
         await context.bot.send_message(
-            chat_id=chat_id,  # ИСПОЛЬЗУЕМ CHAT_ID
+            chat_id=chat_id,
             text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек.</b>",
             parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
         )
@@ -90,12 +89,9 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==================== БИЗНЕС-СООБЩЕНИЯ ====================
 
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ловим сообщения от друзей, чтобы сохранить их chat_id"""
     msg = update.business_message
     if not msg: return
 
-    # owner_id - тот, к чьему бизнес-аккаунту подключен бот
-    # Мы можем узнать его по connection_id, но проще сохранить оба варианта
     owner_id = None
     conn = db.get_conn()
     row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (msg.business_connection_id,)).fetchone()
@@ -103,6 +99,7 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     conn.close()
 
     if owner_id:
+        # Сохраняем chat_id друга
         db.save_peer(owner_id, msg.from_user.id, msg.chat.id)
         logger.info(f"✅ Peer saved: owner={owner_id}, peer={msg.from_user.id}, chat={msg.chat.id}")
 
@@ -252,7 +249,19 @@ api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webap
 async def startup():
     db.init_db()
     await bot_app.initialize()
-    await bot_app.bot.set_webhook(f"{URL}/{TOKEN}", drop_pending_updates=True)
+    # ВОТ ОНО, ИСПРАВЛЕНИЕ: явно указываем, какие обновления мы хотим получать
+    await bot_app.bot.set_webhook(
+        f"{URL}/{TOKEN}", 
+        drop_pending_updates=True,
+        allowed_updates=[
+            "message",
+            "callback_query",
+            "business_connection",
+            "business_message",
+            "edited_business_message",
+            "deleted_business_messages"
+        ]
+    )
     await bot_app.start()
 
 @api_app.on_event("shutdown")
