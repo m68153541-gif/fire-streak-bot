@@ -35,8 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в Business-режиме.\n"
-        "2. Попроси друга написать тебе в ЛС (чтобы я его увидел).\n"
-        "3. Напиши /faier и введи ID друга.",
+        "2. Напиши /faier и введи ID друга.",
         parse_mode="HTML", reply_markup=keyboard
     )
 
@@ -64,12 +63,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     USER_STATES.pop(user.id, None)
     conn_id = db.get_connection(user.id)
 
-    chat_id = db.get_chat_id(user.id, target_id)
-    
-    if not chat_id:
-        await update.message.reply_text("❌ Ошибка: Я еще не видел сообщений от этого друга. Попроси его написать тебе в ЛС и повтори /faier.")
-        return
-
+    # ПРЯМАЯ ОТПРАВКА ПО ID (БЕЗ ПРОВЕРОК)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
@@ -77,33 +71,26 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     
     try:
         await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек.</b>",
+            chat_id=target_id,
+            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек.</b>\n\nНажми кнопку ниже:",
             parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
         )
         await update.message.reply_text("✅ Приглашение отправлено!")
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка Telegram: {e}\n\n"
+            "Если ошибка BUSINESS_PEER_INVALID: попроси друга написать тебе любое сообщение и попробуй снова."
+        )
 
-# ==================== БИЗНЕС-СООБЩЕНИЯ ====================
+# ==================== БИЗНЕС-СООБЩЕНИЯ (БОЛЬШЕ НЕ БЛОКИРУЮТ) ====================
 
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
     if not msg: return
+    logger.info(f"📩 Получено бизнес-сообщение от {msg.from_user.id} в чат {msg.chat.id}")
 
-    owner_id = None
-    conn = db.get_conn()
-    row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (msg.business_connection_id,)).fetchone()
-    if row: owner_id = row["user_id"]
-    conn.close()
-
-    if owner_id:
-        # Сохраняем chat_id друга
-        db.save_peer(owner_id, msg.from_user.id, msg.chat.id)
-        logger.info(f"✅ Peer saved: owner={owner_id}, peer={msg.from_user.id}, chat={msg.chat.id}")
-
-# ==================== КНОПКИ И ОСТАЛЬНОЕ ====================
+# ==================== КНОПКИ ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -249,7 +236,6 @@ api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webap
 async def startup():
     db.init_db()
     await bot_app.initialize()
-    # ВОТ ОНО, ИСПРАВЛЕНИЕ: явно указываем, какие обновления мы хотим получать
     await bot_app.bot.set_webhook(
         f"{URL}/{TOKEN}", 
         drop_pending_updates=True,
