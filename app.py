@@ -2,8 +2,6 @@ import os
 import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -22,22 +20,6 @@ MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
 USER_STATES = {}
 
-# --- ФЕЙКОВЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
-# Чтобы Render не убивал процесс, мы поднимаем простой порт.
-# Бот работает отдельно через polling.
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-def run_fake_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    server.serve_forever()
-
-# ==================== ХЕНДЛЕРЫ БОТА ====================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -54,7 +36,7 @@ async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     conn_id = db.get_connection(user.id)
     if not conn_id:
-        await update.message.reply_text("❌ Ошибка: Бот не подключен в Business-режиме! Переподключи меня в настройках.")
+        await update.message.reply_text("❌ Ошибка: Бот не подключен в Business-режиме! Переподключи меня.")
         return
 
     USER_STATES[user.id] = {"state": "waiting_id"}
@@ -74,6 +56,7 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     USER_STATES.pop(user.id, None)
     conn_id = db.get_connection(user.id)
 
+    # ЖЕСТКАЯ ОТПРАВКА ПО ID (как в рабочей версии)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
@@ -89,6 +72,10 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
         await update.message.reply_text(f"❌ Ошибка: {e}")
+
+# --- Заглушка для бизнес-сообщений, чтобы не было конфликтов ---
+async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pass
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -153,7 +140,7 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать огонек", callback_data="keep_")]])
         try:
             msg = await context.bot.send_message(
-                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку ниже (нужно обоим):",
+                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
                 parse_mode="HTML", reply_markup=keyboard, business_connection_id=s["connection_id_a"]
             )
             db.set_gray(s["chat_id"], msg.message_id)
@@ -193,21 +180,10 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn_db.close()
         logger.info(f"❌ Подключение удалено: {conn.user.id}")
 
-async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.business_message
-    if not msg: return
-    logger.info(f"📩 Бизнес-сообщение от {msg.from_user.id}")
-
-# ==================== ЗАПУСК ====================
-
 def main():
     if not TOKEN:
         raise ValueError("TELEGRAM_TOKEN is missing!")
     db.init_db()
-    
-    # Запускаем фейковый сервер в отдельном потоке, чтобы Render не убил бота
-    threading.Thread(target=run_fake_server, daemon=True).start()
-    
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
