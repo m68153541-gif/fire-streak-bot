@@ -2,9 +2,8 @@ import os
 import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
-
-from fastapi import FastAPI, Request
-import uvicorn
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,13 +17,24 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-URL = os.environ.get("RENDER_EXTERNAL_URL")
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
 USER_STATES = {}
-bot_app = Application.builder().token(TOKEN).build()
-api_app = FastAPI()
+
+# --- ФЕЙКОВЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+# Чтобы Render не убивал процесс, мы поднимаем простой порт.
+# Бот работает отдельно через polling.
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def run_fake_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
 
 # ==================== ХЕНДЛЕРЫ БОТА ====================
 
@@ -33,9 +43,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier и введи числовой ID друга (узнать через @userinfobot).\n"
-        "3. Друг получит приглашение от твоего имени.\n"
-        "4. В 00:00 ЕКБ жмите кнопку «Поддержать» оба!",
+        "2. Напиши /faier и введи числовой ID друга.\n"
+        "3. Друг получит приглашение.",
         parse_mode="HTML"
     )
 
@@ -49,7 +58,7 @@ async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     USER_STATES[user.id] = {"state": "waiting_id"}
-    await update.message.reply_text("👤 Введи числовой ID друга (например, 123456789):")
+    await update.message.reply_text("👤 Введи числовой ID друга:")
 
 async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -93,7 +102,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = receiver_id 
         conn_id = db.get_connection(initiator_id)
         db.create_streak(chat_id, conn_id, initiator_id, receiver_id)
-        await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>\n\nВ 00:00 ЕКБ ждите кнопку.", parse_mode="HTML")
+        await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>", parse_mode="HTML")
         
     elif data.startswith("dec_"):
         await query.edit_message_text("❌ Приглашение отклонено.")
@@ -176,7 +185,7 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn = update.business_connection
     if conn.is_enabled:
         db.save_connection(conn.user.id, conn.id)
-        logger.info(f"✅ Подключение сохранено в БД: {conn.user.id}")
+        logger.info(f"✅ Подключение сохранено: {conn.user.id}")
     else:
         conn_db = db.get_conn()
         conn_db.execute("DELETE FROM user_connections WHERE user_id = ?", (conn.user.id,))
@@ -184,49 +193,38 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn_db.close()
         logger.info(f"❌ Подключение удалено: {conn.user.id}")
 
-# Регистрация
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CommandHandler("faier", faier))
-bot_app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message_input))
-bot_app.add_handler(CallbackQueryHandler(handle_callback))
-bot_app.add_handler(BusinessConnectionHandler(on_business_connect))
-bot_app.add_handler(PreCheckoutQueryHandler(pre_checkout))
-bot_app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.business_message
+    if not msg: return
+    logger.info(f"📩 Бизнес-сообщение от {msg.from_user.id}")
 
-jq = bot_app.job_queue
-jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
-jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
+# ==================== ЗАПУСК ====================
 
-# ==================== FASTAPI (Только для вебхука) ====================
-
-@api_app.post(f"/{TOKEN}")
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot_app.bot)
-    await bot_app.update_queue.put(update)
-    return {"status": "ok"}
-
-@api_app.on_event("startup")
-async def startup():
+def main():
+    if not TOKEN:
+        raise ValueError("TELEGRAM_TOKEN is missing!")
     db.init_db()
-    await bot_app.initialize()
-    await bot_app.bot.set_webhook(
-        f"{URL}/{TOKEN}", 
-        drop_pending_updates=True,
-        allowed_updates=[
-            "message",
-            "callback_query",
-            "business_connection",
-            "business_message",
-            "edited_business_message",
-            "deleted_business_messages"
-        ]
-    )
-    await bot_app.start()
+    
+    # Запускаем фейковый сервер в отдельном потоке, чтобы Render не убил бота
+    threading.Thread(target=run_fake_server, daemon=True).start()
+    
+    app = Application.builder().token(TOKEN).build()
 
-@api_app.on_event("shutdown")
-async def shutdown():
-    await bot_app.stop()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("faier", faier))
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message_input))
+    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(BusinessConnectionHandler(on_business_connect))
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+
+    jq = app.job_queue
+    jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
+    jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
+
+    logger.info("Bot starting (polling)...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    uvicorn.run(api_app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    main()
