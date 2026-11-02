@@ -25,8 +25,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier и введи ID друга.\n"
-        "3. Друг получит приглашение.",
+        "2. Напиши /faier и введи ID друга.",
         parse_mode="HTML"
     )
 
@@ -56,25 +55,31 @@ async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYP
     USER_STATES.pop(user.id, None)
     conn_id = db.get_connection(user.id)
 
-    # ОТПРАВЛЯЕМ СООБЩЕНИЕ ОТ ИМЕНИ САМОГО БОТА (без business_connection_id)
-    # Это создаст диалог, и Telegram не заблокирует его.
+    # Сначала пишем "Отправляю...", чтобы бот не завис
+    status_msg = await update.message.reply_text("⏳ Отправляю приглашение...")
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
     ])
     
     try:
+        # Отправляем от твоего имени через Business API
         await context.bot.send_message(
             chat_id=target_id, 
-            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже, чтобы начать:",
-            parse_mode="HTML", reply_markup=keyboard
-            # Убрали business_connection_id! Отправляем от имени бота
+            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
+            parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
         )
-        await update.message.reply_text("✅ Приглашение отправлено другу!")
+        await status_msg.edit_text("✅ Приглашение успешно отправлено!")
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+        # Если ошибка BUSINESS_PEER_INVALID, просто выводим её без зависания
+        await status_msg.edit_text(
+            f"❌ Ошибка Telegram: {e}\n\n"
+            "Попробуй переподключить бота в настройках Business и напиши другу, чтобы он ответил на любое твое сообщение."
+        )
 
+# --- Заглушка для бизнес-сообщений ---
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
 
@@ -98,11 +103,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         
-        # А вот ТЕПЕРЬ пишем от имени инициатора (диалог уже создан, ошибки не будет)
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="🔥 <b>Наш огонек зажжен! День 1.</b>\n\nНе забывайте общаться и продлевать серию каждый день.",
+                text="🔥 <b>Наш огонек зажжен! День 1.</b>",
                 parse_mode="HTML",
                 business_connection_id=conn_id
             )
