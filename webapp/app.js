@@ -3,23 +3,25 @@ tg.ready();
 tg.expand();
 
 let currentPartnerId = null;
-let fireData = { name: 'Огонек', hat: 'none', scarf: 'none', shirt: 'none' };
+let fireData = { fire_name: 'Огонек', hat: 'none', scarf: 'none', shirt: 'none' };
 
 async function init() {
     const userId = tg.initDataUnsafe.user.id;
-    
-    // Загружаем список собеседников
     const res = await fetch(`/api/get_partners?user_id=${userId}`);
     const data = await res.json();
     
     const partnerList = document.getElementById('partnerList');
-    data.partners.forEach(pid => {
-        const div = document.createElement('div');
-        div.className = 'partner-item';
-        div.textContent = `Пользователь ${pid}`;
-        div.onclick = () => selectPartner(pid);
-        partnerList.appendChild(div);
-    });
+    if (data.partners.length === 0) {
+        partnerList.innerHTML = '<div style="padding:10px; color:#888;">Нет активных огоньков. Напиши /faier в боте.</div>';
+    } else {
+        data.partners.forEach(pid => {
+            const div = document.createElement('div');
+            div.className = 'partner-item';
+            div.textContent = `Собеседник ${pid}`;
+            div.onclick = () => selectPartner(pid);
+            partnerList.appendChild(div);
+        });
+    }
 }
 
 async function selectPartner(pid) {
@@ -27,7 +29,6 @@ async function selectPartner(pid) {
     document.getElementById('selectPartnerBtn').textContent = `👥 Собеседник ${pid}`;
     document.getElementById('partnerList').classList.add('hidden');
     
-    // Загружаем данные огонька
     const userId = tg.initDataUnsafe.user.id;
     const res = await fetch(`/api/get_fire?user_id=${userId}&partner_id=${pid}`);
     const data = await res.json();
@@ -37,7 +38,6 @@ async function selectPartner(pid) {
 
 function updateUI() {
     document.getElementById('fireName').textContent = fireData.fire_name || 'Огонек';
-    // Логика нарядов
     let emoji = '🔥';
     if (fireData.hat === 'cap') emoji = '🧢' + emoji;
     if (fireData.scarf === 'red') emoji += '🧣';
@@ -54,7 +54,6 @@ document.getElementById('fireCharacter').onclick = () => {
     const el = document.getElementById('fireName');
     el.textContent = phrase;
     setTimeout(() => el.textContent = fireData.fire_name || 'Огонек', 1000);
-    
     sendUpdate(`потрогал огонька: ${phrase}`);
 };
 
@@ -80,7 +79,6 @@ async function sendUpdate(action) {
         tg.showAlert('Выбери собеседника!');
         return;
     }
-    
     await fetch('/api/update_fire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
