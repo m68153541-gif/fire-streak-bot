@@ -18,6 +18,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER UNIQUE NOT NULL,
             connection_id_a TEXT,
+            connection_id_b TEXT,
             user_a INTEGER NOT NULL,
             user_b INTEGER NOT NULL,
             streak INTEGER DEFAULT 1,
@@ -34,25 +35,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS user_connections (
             user_id INTEGER PRIMARY KEY,
             connection_id TEXT NOT NULL
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS peers (
-            owner_id INTEGER,
-            peer_id INTEGER,
-            chat_id INTEGER,
-            PRIMARY KEY (owner_id, peer_id)
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS fire_customization (
-            user_id INTEGER,
-            partner_id INTEGER,
-            fire_name TEXT DEFAULT 'Огонек',
-            hat TEXT DEFAULT 'none',
-            scarf TEXT DEFAULT 'none',
-            shirt TEXT DEFAULT 'none',
-            PRIMARY KEY (user_id, partner_id)
         )
     """)
     conn.commit()
@@ -73,21 +55,6 @@ def get_connection(user_id):
     row = conn.execute("SELECT connection_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
     conn.close()
     return row["connection_id"] if row else None
-
-def save_peer(owner_id, peer_id, chat_id):
-    conn = get_conn()
-    conn.execute("""
-        INSERT INTO peers (owner_id, peer_id, chat_id) VALUES (?, ?, ?)
-        ON CONFLICT(owner_id, peer_id) DO UPDATE SET chat_id = excluded.chat_id
-    """, (owner_id, peer_id, chat_id))
-    conn.commit()
-    conn.close()
-
-def get_chat_id(owner_id, peer_id):
-    conn = get_conn()
-    row = conn.execute("SELECT chat_id FROM peers WHERE owner_id = ? AND peer_id = ?", (owner_id, peer_id)).fetchone()
-    conn.close()
-    return row["chat_id"] if row else None
 
 def create_streak(chat_id, conn_id, user_a, user_b):
     conn = get_conn()
@@ -110,17 +77,12 @@ def get_streak(chat_id):
     conn.close()
     return row
 
-def get_all_streaks():
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM streaks").fetchall()
-    conn.close()
-    return rows
-
 def set_gray(chat_id, msg_id=None):
     conn = get_conn()
     now = datetime.now(TZ_EKB).isoformat()
     conn.execute("""
-        UPDATE streaks SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
+        UPDATE streaks 
+        SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
         WHERE chat_id = ?
     """, (now, msg_id, chat_id))
     conn.commit()
@@ -162,9 +124,11 @@ def restore_streak(chat_id, paid=False):
     if not row: 
         conn.close()
         return False
+    
     if row["restore_count"] >= 3 and not paid:
         conn.close()
         return False
+        
     conn.execute("""
         UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1,
         active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0
@@ -174,43 +138,22 @@ def restore_streak(chat_id, paid=False):
     conn.close()
     return True
 
+def get_all_streaks():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM streaks").fetchall()
+    conn.close()
+    return rows
+
 def get_unsent_reminders():
+    """Возвращает серые огоньки для напоминаний"""
     conn = get_conn()
     rows = conn.execute("SELECT * FROM streaks WHERE is_gray = 1").fetchall()
     conn.close()
     return rows
 
 def kill_streak(chat_id):
+    """Удаляет окончательно сгоревшую серию"""
     conn = get_conn()
     conn.execute("DELETE FROM streaks WHERE chat_id = ?", (chat_id,))
-    conn.commit()
-    conn.close()
-
-def get_partners(user_id):
-    conn = get_conn()
-    rows = conn.execute("SELECT user_a, user_b FROM streaks WHERE user_a = ? OR user_b = ?", (user_id, user_id)).fetchall()
-    conn.close()
-    partners = []
-    for row in rows:
-        partner = row["user_b"] if row["user_a"] == user_id else row["user_a"]
-        if partner not in partners: partners.append(partner)
-    return partners
-
-def get_fire_data(user_id, partner_id):
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM fire_customization WHERE user_id = ? AND partner_id = ?", (user_id, partner_id)).fetchone()
-    conn.close()
-    if not row: return {"fire_name": "Огонек", "hat": "none", "scarf": "none", "shirt": "none"}
-    return dict(row)
-
-def save_fire_data(user_id, partner_id, fire_name, hat, scarf, shirt):
-    conn = get_conn()
-    conn.execute("""
-        INSERT INTO fire_customization (user_id, partner_id, fire_name, hat, scarf, shirt)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, partner_id) DO UPDATE SET
-            fire_name = excluded.fire_name, hat = excluded.hat,
-            scarf = excluded.scarf, shirt = excluded.shirt
-    """, (user_id, partner_id, fire_name, hat, scarf, shirt))
     conn.commit()
     conn.close()
