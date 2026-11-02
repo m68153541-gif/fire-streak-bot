@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, PreCheckoutQueryHandler
+    ContextTypes, filters, PreCheckoutQueryHandler, BusinessConnectionHandler
 )
 
 import database as db
@@ -251,12 +251,6 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to send reminder: {e}")
 
 
-async def check_milestones(context: ContextTypes.DEFAULT_TYPE):
-    """Проверка рубежей (раз в час)."""
-    # Реализовано внутри handle_business_message — при продлении проверяем milestone
-    pass
-
-
 # ========== ВОССТАНОВЛЕНИЕ ЗА ЗВЁЗДЫ ==========
 
 async def restore_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,7 +322,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_username_input))
 
     # Business
-    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_CONNECTION, handle_business_connection))
+    # ИСПРАВЛЕНИЕ: используем BusinessConnectionHandler и правильный фильтр
+    app.add_handler(BusinessConnectionHandler(handle_business_connection))
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
 
     # Callback
