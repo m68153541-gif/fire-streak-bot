@@ -27,7 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я — бот для поддержания серии огонька.\n\n"
         "📌 <b>Инструкция:</b>\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier и следуй инструкциям.\n"
+        "2. Напиши /faier и введи числовой ID друга.\n"
         "3. Друг получит приглашение с кнопкой «Принять».\n"
         "4. В 00:00 ЕКБ я пришлю кнопку «Поддержать огонек».",
         parse_mode="HTML"
@@ -43,76 +43,52 @@ async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка: Бот не подключен в Business-режиме!")
         return
 
-    USER_STATES[user.id] = {"state": "waiting_reply"}
+    USER_STATES[user.id] = {"state": "waiting_id"}
     await update.message.reply_text(
-        "👤 <b>Шаг 1:</b> Сделай свайп влево по <b>любому сообщению друга</b> в вашем чате и ответь на него (напиши что угодно, например «Привет»).\n\n"
-        "Затем перешли это сообщение сюда.",
+        "👤 <b>Шаг 1:</b> Попроси друга узнать свой ID.\n\n"
+        "Для этого пусть он напишет боту <b>@userinfobot</b> команду /start. Бот пришлёт ему число (например, 123456789).\n\n"
+        "Введи это число сюда:",
         parse_mode="HTML"
     )
 
-# Обработка сообщений (ждем ответ на сообщение друга)
 async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     state_data = USER_STATES.get(user.id)
     
-    if not state_data:
+    if not state_data or state_data.get("state") != "waiting_id":
         return
 
-    if state_data.get("state") == "waiting_reply":
-        msg = update.message
-        # Проверяем, есть ли reply_to_message (на кого ответили)
-        if not msg.reply_to_message:
-            await msg.reply_text("❌ Ты не ответил на сообщение друга. Сделай свайп по его сообщению и ответь.")
-            return
-            
-        # Получаем данные того, на кого ответили
-        replied_user = msg.reply_to_message.from_user
-        
-        # Если ответили сами себе или боту - ошибка
-        if replied_user.id == user.id or replied_user.is_bot:
-            await msg.reply_text("❌ Это твое сообщение или бот. Ответь на сообщение друга.")
-            return
+    text = update.message.text.strip()
+    
+    # Проверяем, что введено число
+    if not text.isdigit():
+        await update.message.reply_text("❌ Введи числовой ID (только цифры, без @ и букв).")
+        return
 
-        target_id = replied_user.id
-        target_name = replied_user.first_name
-        
-        USER_STATES[user.id] = {"state": "waiting_username", "target_id": target_id, "target_name": target_name}
-        
-        await msg.reply_text(
-            f"✅ ID друга ({target_name}) получен!\n\n"
-            f"<b>Шаг 2:</b> Введи его @username (например: @ivan_petrov).",
-            parse_mode="HTML"
+    target_id = int(text)
+    USER_STATES.pop(user.id, None)
+
+    conn_id = db.get_connection(user.id)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
+         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
+    ])
+    
+    try:
+        # Отправляем сообщение другу ОТ ИМЕНИ ПОЛЬЗОВАТЕЛЯ, используя его числовой ID
+        await context.bot.send_message(
+            chat_id=target_id, 
+            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+            business_connection_id=conn_id
         )
+        await update.message.reply_text("✅ Приглашение успешно отправлено другу!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка отправки: {e}")
 
-    elif state_data.get("state") == "waiting_username":
-        text = update.message.text.strip()
-        if not text.startswith("@"):
-            await update.message.reply_text("❌ Введи корректный @username (начинается с @).")
-            return
-
-        target_id = state_data["target_id"]
-        USER_STATES.pop(user.id, None) # Сбрасываем
-
-        conn_id = db.get_connection(user.id)
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
-             InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
-        ])
-        
-        try:
-            await context.bot.send_message(
-                chat_id=target_id, 
-                text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
-                parse_mode="HTML",
-                reply_markup=keyboard,
-                business_connection_id=conn_id
-            )
-            await update.message.reply_text("✅ Приглашение успешно отправлено другу!")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
-
-# ==================== КНОПКИ И ОСТАЛЬНАЯ ЛОГИКА ====================
+# ==================== КНОПКИ И ОСТАЛЬНАЯ ЛОГИКА (БЕЗ ИЗМЕНЕНИЙ) ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -246,7 +222,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("faier", faier))
     
-    # Теперь обрабатываем ВСЕ текстовые сообщения (и ответы) через одну функцию
+    # Теперь обрабатываем только текстовые сообщения (для ввода ID)
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message_input))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
