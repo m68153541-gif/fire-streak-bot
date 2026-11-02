@@ -18,7 +18,6 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER UNIQUE NOT NULL,
             connection_id_a TEXT,
-            connection_id_b TEXT,
             user_a INTEGER NOT NULL,
             user_b INTEGER NOT NULL,
             streak INTEGER DEFAULT 1,
@@ -41,6 +40,7 @@ def init_db():
     conn.close()
 
 def save_connection(user_id, connection_id):
+    """Сохраняем подключение, чтобы бот не забыл его после перезапуска"""
     conn = get_conn()
     conn.execute("""
         INSERT INTO user_connections (user_id, connection_id)
@@ -77,12 +77,17 @@ def get_streak(chat_id):
     conn.close()
     return row
 
+def get_all_streaks():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM streaks").fetchall()
+    conn.close()
+    return rows
+
 def set_gray(chat_id, msg_id=None):
     conn = get_conn()
     now = datetime.now(TZ_EKB).isoformat()
     conn.execute("""
-        UPDATE streaks 
-        SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
+        UPDATE streaks SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
         WHERE chat_id = ?
     """, (now, msg_id, chat_id))
     conn.commit()
@@ -124,11 +129,9 @@ def restore_streak(chat_id, paid=False):
     if not row: 
         conn.close()
         return False
-    
     if row["restore_count"] >= 3 and not paid:
         conn.close()
         return False
-        
     conn.execute("""
         UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1,
         active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0
@@ -138,21 +141,13 @@ def restore_streak(chat_id, paid=False):
     conn.close()
     return True
 
-def get_all_streaks():
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM streaks").fetchall()
-    conn.close()
-    return rows
-
 def get_unsent_reminders():
-    """Возвращает серые огоньки для напоминаний"""
     conn = get_conn()
     rows = conn.execute("SELECT * FROM streaks WHERE is_gray = 1").fetchall()
     conn.close()
     return rows
 
 def kill_streak(chat_id):
-    """Удаляет окончательно сгоревшую серию"""
     conn = get_conn()
     conn.execute("DELETE FROM streaks WHERE chat_id = ?", (chat_id,))
     conn.commit()
