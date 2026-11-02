@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мой Огонек</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/webapp/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <button id="selectPartnerBtn" class="main-btn">👥 Выбрать собеседника</button>
+        <div id="partnerList" class="hidden"></div>
+
+        <div class="fire-display">
+            <div id="fireCharacter" class="fire">🔥</div>
+            <div id="fireName" class="fire-name">Огонек</div>
+        </div>
+
+        <div class="customization-panel">
+            <h3>Нарядить огонька</h3>
+            <div class="options">
+                <button class="option-btn" data-type="hat" data-value="cap">🧢 Шапочка</button>
+                <button class="option-btn" data-type="scarf" data-value="red">🧣 Шарфик</button>
+                <button class="option-btn" data-type="shirt" data-value="tshirt">👕 Футболка</button>
+            </div>
+            <input type="text" id="fireNameInput" placeholder="Имя огонька" maxlength="20">
+            <button id="saveBtn" class="main-btn">Сохранить</button>
+        </div>
+    </div>
+    <script src="/webapp/app.js"></script>
+</body>
+</html>
