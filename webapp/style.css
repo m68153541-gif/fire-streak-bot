@@ -2,12 +2,7 @@ body {
     background-color: var(--tg-theme-bg-color, #17212b);
     color: var(--tg-theme-text-color, #ffffff);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    margin: 0;
-    padding: 20px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
+    margin: 0; padding: 20px; display: flex; justify-content: center; min-height: 100vh;
 }
 .app-container { width: 100%; max-width: 400px; text-align: center; }
 .main-btn {
@@ -16,14 +11,64 @@ body {
     border: none; padding: 15px; border-radius: 12px;
     font-size: 16px; font-weight: bold; width: 100%; margin-bottom: 20px; cursor: pointer;
 }
-.fire-display { margin: 30px 0; }
-.fire { font-size: 120px; cursor: pointer; transition: transform 0.1s; user-select: none; }
+
+/* --- ПЕРСОНАЖ --- */
+.character-container {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    margin: 0 auto 30px auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.fire {
+    font-size: 120px;
+    cursor: pointer;
+    transition: transform 0.1s;
+    user-select: none;
+    z-index: 5; /* Огонек в центре */
+}
+
 .fire:active { transform: scale(0.9); }
-.fire-name { font-size: 24px; font-weight: bold; margin-top: 10px; }
+
+.fire-name {
+    position: absolute; bottom: -30px; width: 100%;
+    font-size: 20px; font-weight: bold; text-align: center;
+}
+
+/* Слои одежды (накладываются поверх огонька) */
+.layer {
+    position: absolute;
+    z-index: 10;
+    pointer-events: none; /* Чтобы клики проходили сквозь одежду на огонек */
+    transition: all 0.3s ease;
+}
+
+/* Позиции для одежды (подогнаны под размер 120px) */
+.hat { top: -10px; font-size: 50px; }
+.scarf { top: 90px; left: 100px; transform: translateX(-50%); font-size: 40px; }
+.shirt { top: 110px; left: 100px; transform: translateX(-50%); font-size: 60px; z-index: 4; } /* Футболка под огоньком */
+
+/* --- ПАНЕЛЬ КАСТОМИЗАЦИИ --- */
 .customization-panel { background: var(--tg-theme-secondary-bg-color, #232e3c); border-radius: 16px; padding: 20px; }
-.options { display: flex; gap: 10px; justify-content: center; margin: 15px 0; }
-.option-btn { background: #2b5278; color: white; border: none; padding: 10px; border-radius: 8px; cursor: pointer; flex: 1; }
-#fireNameInput { width: 90%; padding: 12px; border-radius: 8px; border: 1px solid #3a4a5a; background: #1c2733; color: white; font-size: 16px; margin-bottom: 10px; }
+
+.tabs { display: flex; gap: 10px; margin-bottom: 15px; }
+.tab-btn { flex: 1; background: transparent; color: #888; border: none; padding: 10px; font-weight: bold; cursor: pointer; border-bottom: 2px solid transparent; }
+.tab-btn.active { color: white; border-bottom-color: #3390ec; }
+
+.tab-content { display: none; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.tab-content.active { display: flex; }
+
+.item-btn {
+    background: #2b5278; color: white; border: none;
+    padding: 10px 15px; border-radius: 8px; cursor: pointer;
+    font-size: 14px; transition: 0.2s;
+}
+.item-btn.active { background: #3390ec; box-shadow: 0 0 10px rgba(51, 144, 236, 0.5); }
+
+#fireNameInput { width: 90%; padding: 12px; border-radius: 8px; border: 1px solid #3a4a5a; background: #1c2733; color: white; font-size: 16px; margin-top: 20px; margin-bottom: 10px; }
 .hidden { display: none; }
 #partnerList { background: #232e3c; border-radius: 12px; padding: 10px; margin-bottom: 20px; }
 .partner-item { padding: 10px; border-bottom: 1px solid #3a4a5a; cursor: pointer; }
