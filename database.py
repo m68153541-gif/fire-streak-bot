@@ -40,7 +40,6 @@ def init_db():
     conn.close()
 
 def save_connection(user_id, connection_id):
-    """Сохраняем подключение, чтобы бот не забыл его после перезапуска"""
     conn = get_conn()
     conn.execute("""
         INSERT INTO user_connections (user_id, connection_id)
