@@ -13,7 +13,6 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
-    # Таблица серий
     c.execute("""
         CREATE TABLE IF NOT EXISTS streaks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,14 +30,12 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Таблица подключений Business
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_connections (
             user_id INTEGER PRIMARY KEY,
             connection_id TEXT NOT NULL
         )
     """)
-    # Таблица кастомизации огонька
     c.execute("""
         CREATE TABLE IF NOT EXISTS fire_customization (
             user_id INTEGER,
@@ -96,7 +93,93 @@ def get_all_streaks():
     conn.close()
     return rows
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ MINI APP ---
+def set_gray(chat_id, msg_id=None):
+    conn = get_conn()
+    now = datetime.now(TZ_EKB).isoformat()
+    conn.execute("""
+        UPDATE streaks 
+        SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
+        WHERE chat_id = ?
+    """, (now, msg_id, chat_id))
+    conn.commit()
+    conn.close()
+
+def press_button(chat_id, user_id):
+    conn = get_conn()
+    row = get_streak(chat_id)
+    if not row: 
+        conn.close()
+        return None, 0
+
+    if user_id == row["user_a"]:
+        conn.execute("UPDATE streaks SET user_a_pressed = 1 WHERE chat_id = ?", (chat_id,))
+    elif user_id == row["user_b"]:
+        conn.execute("UPDATE streaks SET user_b_pressed = 1 WHERE chat_id = ?", (chat_id,))
+    
+    conn.commit()
+    row = get_streak(chat_id)
+    total_pressed = row["user_a_pressed"] + row["user_b_pressed"]
+    
+    if row["user_a_pressed"] == 1 and row["user_b_pressed"] == 1:
+        new_streak = row["streak"] + 1
+        conn.execute("""
+            UPDATE streaks SET streak = ?, is_gray = 0, gray_since = NULL, active_msg_id = NULL, 
+            user_a_pressed = 0, user_b_pressed = 0 
+            WHERE chat_id = ?
+        """, (new_streak, chat_id))
+        conn.commit()
+        conn.close()
+        return "success", new_streak
+    
+    conn.close()
+    return "waiting", total_pressed
+
+def restore_streak(chat_id, paid=False):
+    conn = get_conn()
+    row = get_streak(chat_id)
+    if not row: 
+        conn.close()
+        return False
+    if row["restore_count"] >= 3 and not paid:
+        conn.close()
+        return False
+    conn.execute("""
+        UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1,
+        active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0
+        WHERE chat_id = ?
+    """, (chat_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+def get_unsent_reminders():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM streaks WHERE is_gray = 1").fetchall()
+    conn.close()
+    return rows
+
+def kill_streak(chat_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM streaks WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+
+# --- MINI APP ---
+
+def get_partners(user_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT user_a, user_b FROM streaks WHERE user_a = ? OR user_b = ?",
+        (user_id, user_id)
+    ).fetchall()
+    conn.close()
+    
+    partners = []
+    for row in rows:
+        partner = row["user_b"] if row["user_a"] == user_id else row["user_a"]
+        if partner not in partners:
+            partners.append(partner)
+    return partners
 
 def get_fire_data(user_id, partner_id):
     conn = get_conn()
@@ -122,19 +205,3 @@ def save_fire_data(user_id, partner_id, fire_name, hat, scarf, shirt):
     """, (user_id, partner_id, fire_name, hat, scarf, shirt))
     conn.commit()
     conn.close()
-
-def get_partners(user_id):
-    """Возвращает список ID собеседников, с которыми есть серия."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT user_a, user_b FROM streaks WHERE user_a = ? OR user_b = ?",
-        (user_id, user_id)
-    ).fetchall()
-    conn.close()
-    
-    partners = []
-    for row in rows:
-        partner = row["user_b"] if row["user_a"] == user_id else row["user_a"]
-        if partner not in partners:
-            partners.append(partner)
-    return partners
