@@ -22,27 +22,61 @@ MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    await update.message.reply_text(
+        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
+        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
+        "2. Напиши <code>/l</code>, чтобы проверить статус подключения.\n"
+        "3. Напиши <code>/faier</code> прямо в чате с другом.",
+        parse_mode="HTML"
+    )
+
+async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /l - проверка подключения"""
+    user = update.effective_user
     conn_id = db.get_connection(user.id)
     
-    text = (
-        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
-        "Чтобы начать, выполни два шага:\n"
-        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши команду <code>/faier</code> прямо в чате с другом, с которым хочешь растить огонек."
-    )
-    
-    if conn_id:
-        text = (
-            f"✅ <b>Бот подключен к твоему Business!</b>\n\n"
-            "Теперь напиши команду <code>/faier</code> прямо в чате с другом, с которым хочешь растить огонек."
+    if not conn_id:
+        await update.message.reply_text(
+            "❌ <b>Бот НЕ подключен к Business.</b>\n\n"
+            "Зайди в Настройки → Telegram Business → Чат-боты и добавь меня заново.\n"
+            "Убедись, что включены права «Читать сообщения» и «Отвечать на сообщения».",
+            parse_mode="HTML"
         )
+        return
         
-    await update.message.reply_text(text, parse_mode="HTML")
+    try:
+        # Пробуем получить информацию о подключении
+        conn_info = await context.bot.get_business_connection(conn_id)
+        
+        # Проверяем права
+        rights = conn_info.rights
+        can_reply = rights.can_reply if rights else False
+        
+        if can_reply:
+            await update.message.reply_text(
+                f"✅ <b>Бот подключен и готов к работе!</b>\n\n"
+                f"ID подключения: <code>{conn_id[:10]}...</code>\n"
+                f"Право отвечать: <b>Да</b>\n\n"
+                "Теперь напиши <code>/faier</code> прямо в чате с другом.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ <b>Бот подключен, но нет права отвечать!</b>\n\n"
+                "Зайди в Настройки → Telegram Business → Чат-боты и включи право «Отвечать на сообщения».",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ <b>Ошибка проверки:</b> {e}\n\n"
+            "Переподключи бота в настройках Business.",
+            parse_mode="HTML"
+        )
 
 # ==================== КОМАНДА /faier В ЧАТЕ С ДРУГОМ ====================
 
 async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что это Business-сообщение (команда в чате с другом)
+    # Проверяем, что это Business-сообщение
     msg = update.business_message
     if not msg:
         return
@@ -73,12 +107,12 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
-    # Удаляем сообщение с командой (если есть права)
+    # Удаляем сообщение с командой
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except: pass
 
-    # Отправляем приглашение с кнопками
+    # Отправляем приглашение
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{owner_id}_{msg.from_user.id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{owner_id}")]
@@ -163,7 +197,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if db.restore_streak(chat_id, paid=False):
                 await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
         else:
-            # Отправляем счет на 25 звезд
             try:
                 await context.bot.send_invoice(
                     chat_id=chat_id,
@@ -215,7 +248,6 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             except: pass
             continue
         
-        # Если остались бесплатные восстановления, даем кнопку
         if s["restore_count"] < 3:
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")],
@@ -254,6 +286,7 @@ def main():
 
     # В личке
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("l", check_connection))
     
     # В бизнес-чате (команда /faier)
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
