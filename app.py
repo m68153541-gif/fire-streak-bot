@@ -19,7 +19,7 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 DB_PATH = "streaks.db"
 MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
-# ==================== БАЗА ДАННЫХ (ВСЁ В ОДНОМ ФАЙЛЕ) ====================
+# ==================== БАЗА ДАННЫХ ====================
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -219,14 +219,26 @@ async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}", parse_mode="HTML")
 
 async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что это именно бизнес-сообщение
-    msg = update.business_message
+    # Пытаемся получить сообщение из бизнес-контекста или обычного
+    msg = update.business_message or update.message
     if not msg:
         return
 
-    chat_id = msg.chat.id
-    conn_id = msg.business_connection_id
+    # Получаем conn_id (в бизнес-сообщениях он есть, в обычных может отсутствовать)
+    conn_id = getattr(msg, "business_connection_id", None)
     
+    # Если это не бизнес-сообщение и нет conn_id — просто выходим
+    if not conn_id:
+        # Если команда пришла в личку боту, но не в Business — предупреждаем
+        if update.effective_chat.type == "private":
+             await context.bot.send_message(
+                 chat_id=msg.chat.id,
+                 text="⚠️ Эта команда работает только в чате с другом (через Telegram Business)."
+             )
+        return
+
+    chat_id = msg.chat.id
+
     conn = get_conn()
     row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
     conn.close()
@@ -403,8 +415,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("l", check_connection))
     
-    # Ловим бизнес-команды
+    # Ловим бизнес-сообщения
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
+    # Ловим команду /faier как обычную (на случай, если Telegram пришлет её вне бизнес-контекста)
+    app.add_handler(CommandHandler("faier", faier_in_chat))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
