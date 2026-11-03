@@ -68,6 +68,12 @@ def save_connection(user_id, connection_id, peer_chat_id=None):
     conn.commit()
     conn.close()
 
+def save_peer_chat_id(user_id, peer_chat_id):
+    conn = get_conn()
+    conn.execute("UPDATE user_connections SET peer_chat_id = ? WHERE user_id = ?", (peer_chat_id, user_id))
+    conn.commit()
+    conn.close()
+
 def get_connection(user_id):
     conn = get_conn()
     row = conn.execute("SELECT connection_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
@@ -188,36 +194,70 @@ def kill_streak(chat_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # ПРОВЕРКА: если пришел payload от кнопки управления ботом в чате
+    # Если пришел payload от кнопки управления ботом (bizChat)
     if context.args and context.args[0].startswith("bizChat"):
-        chat_id_str = context.args[0][7:]  # Отрезаем "bizChat"
+        chat_id_str = context.args[0][7:]
         try:
             chat_id = int(chat_id_str)
             logger.info(f"✅ ПОЛУЧЕН CHAT_ID ИЗ КНОПКИ: {chat_id}")
-            
-            # Сохраняем этот chat_id в базу
-            conn = get_conn()
-            conn.execute("UPDATE user_connections SET peer_chat_id = ? WHERE user_id = ?", (chat_id, user.id))
-            conn.commit()
-            conn.close()
+            save_peer_chat_id(user.id, chat_id)
             
             await update.message.reply_text(
-                f"✅ Я вижу этот чат! ID: <code>{chat_id}</code>\n\n"
-                "Теперь напиши /faier в чате с другом.",
+                f"✅ Я запомнил этот чат (ID: <code>{chat_id}</code>).\n\n"
+                "Теперь напиши мне в личку команду <code>/send</code>, чтобы отправить приглашение другу.",
                 parse_mode="HTML"
             )
         except ValueError:
             await update.message.reply_text("❌ Ошибка в ID чата.")
         return
 
-    # Обычный старт
+    # Обычный старт (полная инструкция)
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
-        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Открой чат с другом и нажми кнопку управления ботом (в шапке чата).\n"
-        "3. После этого напиши <code>/faier</code> в чате с другом.",
+        "<b>Инструкция по запуску огонька:</b>\n\n"
+        "1️⃣ <b>Подключи бота:</b> Зайди в Настройки → Telegram Business → Чат-боты и добавь меня (@fier_zyza_bot). Включи все права (Читать, Отвечать).\n\n"
+        "2️⃣ <b>Открой чат с другом:</b> В самом чате (вверху, где имя друга) нажми на иконку моего бота (кнопка «Вызвать бота»).\n\n"
+        "3️⃣ <b>Вернись в этот чат:</b> Вернись сюда и напиши <code>/send</code>, чтобы отправить приглашение.\n\n"
+        "4️⃣ <b>Когда друг примет:</b> Бот начнет считать дни. В 00:00 по ЕКБ ждите кнопку «Поддержать».\n\n"
+        "<i>Если что-то пошло не так, напиши <code>/l</code> для проверки статуса.</i>",
         parse_mode="HTML"
     )
+
+async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /send для принудительной отправки приглашения в сохраненный чат"""
+    user = update.effective_user
+    conn_id = get_connection(user.id)
+    peer_chat_id = get_peer_chat_id(user.id)
+    
+    if not conn_id:
+        await update.message.reply_text("❌ Бот не подключен. Добавь меня в Business.")
+        return
+    if not peer_chat_id:
+        await update.message.reply_text("❌ Я не знаю ID чата. Сначала нажми кнопку бота в чате с другом (Шаг 2 в инструкции).")
+        return
+    
+    existing = get_streak(peer_chat_id)
+    if existing:
+        await update.message.reply_text(f"🔥 Серия уже есть: {existing['streak']} дней.")
+        return
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{peer_chat_id}"),
+         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
+    ])
+    
+    try:
+        await context.bot.send_message(
+            chat_id=peer_chat_id,
+            text="🔥 <b>Предложение растить огонек!</b>\n\nНажми кнопку ниже:",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+            business_connection_id=conn_id
+        )
+        await update.message.reply_text("✅ Приглашение отправлено в чат с другом!")
+    except Exception as e:
+        logger.error(f"Ошибка отправки приглашения: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -225,76 +265,15 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not conn_id:
         await update.message.reply_text("❌ Нет подключения.")
         return
-    
     try:
         conn_info = await context.bot.get_business_connection(conn_id)
         text = f"<b>ID подключения:</b> {conn_info.id}\n"
-        text += f"<b>ID пользователя:</b> {conn_info.user.id}\n"
-        
-        if hasattr(conn_info, 'user_chat_id') and conn_info.user_chat_id:
-            text += f"<b>user_chat_id:</b> <code>{conn_info.user_chat_id}</code>\n"
-        else:
-            text += "<b>user_chat_id:</b> не найден\n"
-            
-        if conn_info.rights:
-            text += f"<b>can_reply:</b> {conn_info.rights.can_reply}\n"
-        
-        logger.info(f"FORCE: {text}")
+        text += f"<b>user_chat_id:</b> {getattr(conn_info, 'user_chat_id', 'Нет')}\n"
+        text += f"<b>can_reply:</b> {conn_info.rights.can_reply if conn_info.rights else 'Нет'}\n"
+        text += f"<b>Сохраненный peer_chat_id:</b> {get_peer_chat_id(user.id)}\n"
         await update.message.reply_text(text, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
-
-async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.business_message or update.message
-    if not msg: return
-
-    conn_id = getattr(msg, "business_connection_id", None)
-    
-    if not conn_id:
-        if update.effective_chat.type == "private":
-             await context.bot.send_message(
-                 chat_id=msg.chat.id,
-                 text="⚠️ Эта команда работает только в чате с другом (через Telegram Business)."
-             )
-        return
-
-    chat_id = msg.chat.id
-    conn = get_conn()
-    row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
-    conn.close()
-    if not row: return
-    owner_id = row["user_id"]
-
-    # Проверка, что команду дал владелец
-    if msg.from_user.id != owner_id:
-        return
-
-    existing = get_streak(chat_id)
-    if existing:
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"🔥 Серия уже есть: <b>{existing['streak']} дней</b>.",
-                parse_mode="HTML", business_connection_id=conn_id
-            )
-        except: pass
-        return
-
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-    except: pass
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{owner_id}_{msg.from_user.id}"),
-         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{owner_id}")]
-    ])
-
-    try:
-        await context.bot.send_message(
-            chat_id=chat_id, text="🔥 <b>Предложение растить огонек!</b>",
-            parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
-        )
-    except Exception as e:
-        logger.error(f"Ошибка отправки приглашения: {e}")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -377,7 +356,7 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
     if conn.is_enabled:
         peer_id = getattr(conn, 'user_chat_id', None)
         save_connection(conn.user.id, conn.id, peer_id)
-        logger.info(f"✅ Подключение: {conn.user.id}, user_chat_id: {peer_id}")
+        logger.info(f"✅ Подключение: {conn.user.id}")
     else:
         delete_connection(conn.user.id)
         logger.info(f"❌ Отключение: {conn.user.id}")
@@ -435,11 +414,8 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("send", send_invite_command))
     app.add_handler(CommandHandler("l", force_check))
-    app.add_handler(CommandHandler("force", force_check))
-    
-    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
-    app.add_handler(CommandHandler("faier", faier_in_chat))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
