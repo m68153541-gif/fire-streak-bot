@@ -15,104 +15,81 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
+URL = os.environ.get("RENDER_EXTERNAL_URL") # Render сам подставит сюда твой URL
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
-MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
-# ==================== БОТ В ЛИЧКЕ ====================
+# ==================== ХЕНДЛЕРЫ БОТА ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши <code>/l</code>, чтобы проверить статус подключения.\n"
-        "3. Напиши <code>/faier</code> прямо в чате с другом.",
+        "2. Напиши <code>/l</code>, чтобы проверить статус.\n"
+        "3. Напиши <code>/faier</code> в чате с другом.",
         parse_mode="HTML"
     )
 
 async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /l - проверка подключения"""
     user = update.effective_user
     conn_id = db.get_connection(user.id)
     
     if not conn_id:
         await update.message.reply_text(
             "❌ <b>Бот НЕ подключен к Business.</b>\n\n"
-            "Зайди в Настройки → Telegram Business → Чат-боты и добавь меня заново.\n"
-            "Убедись, что включены права «Читать сообщения» и «Отвечать на сообщения».",
+            "Зайди в Настройки → Telegram Business → Чат-боты и добавь меня.",
             parse_mode="HTML"
         )
         return
         
     try:
-        # Пробуем получить информацию о подключении
         conn_info = await context.bot.get_business_connection(conn_id)
-        
-        # Проверяем права
         rights = conn_info.rights
         can_reply = rights.can_reply if rights else False
         
         if can_reply:
             await update.message.reply_text(
-                f"✅ <b>Бот подключен и готов к работе!</b>\n\n"
-                f"ID подключения: <code>{conn_id[:10]}...</code>\n"
-                f"Право отвечать: <b>Да</b>\n\n"
-                "Теперь напиши <code>/faier</code> прямо в чате с другом.",
+                "✅ <b>Бот подключен и готов!</b>\n\n"
+                "Напиши <code>/faier</code> в чате с другом.",
                 parse_mode="HTML"
             )
         else:
             await update.message.reply_text(
-                "⚠️ <b>Бот подключен, но нет права отвечать!</b>\n\n"
-                "Зайди в Настройки → Telegram Business → Чат-боты и включи право «Отвечать на сообщения».",
+                "⚠️ <b>Нет права отвечать.</b>\n\n"
+                "Включи «Отвечать на сообщения» в настройках Business.",
                 parse_mode="HTML"
             )
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ <b>Ошибка проверки:</b> {e}\n\n"
-            "Переподключи бота в настройках Business.",
-            parse_mode="HTML"
-        )
-
-# ==================== КОМАНДА /faier В ЧАТЕ С ДРУГОМ ====================
+        await update.message.reply_text(f"❌ Ошибка: {e}", parse_mode="HTML")
 
 async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что это Business-сообщение
     msg = update.business_message
-    if not msg:
-        return
+    if not msg: return
 
     chat_id = msg.chat.id
     conn_id = msg.business_connection_id
     
-    # Находим владельца подключения
     conn = db.get_conn()
     row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
     conn.close()
-    
-    if not row:
-        return
+    if not row: return
         
     owner_id = row["user_id"]
 
-    # Если серия уже есть — сообщаем
     existing = db.get_streak(chat_id)
     if existing:
         try:
             await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🔥 У вас уже есть серия: <b>{existing['streak']} дней</b>.",
-                parse_mode="HTML",
-                business_connection_id=conn_id
+                chat_id=chat_id, text=f"🔥 Серия уже есть: <b>{existing['streak']} дней</b>.",
+                parse_mode="HTML", business_connection_id=conn_id
             )
         except: pass
         return
 
-    # Удаляем сообщение с командой
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except: pass
 
-    # Отправляем приглашение
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{owner_id}_{msg.from_user.id}"),
          InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{owner_id}")]
@@ -120,16 +97,11 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await context.bot.send_message(
-            chat_id=chat_id,
-            text="🔥 <b>Предложение растить огонек!</b>\n\nНажми «Принять», чтобы начать серию.",
-            parse_mode="HTML",
-            reply_markup=keyboard,
-            business_connection_id=conn_id
+            chat_id=chat_id, text="🔥 <b>Предложение растить огонек!</b>",
+            parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки приглашения: {e}")
-
-# ==================== КНОПКИ ====================
+        logger.error(f"Ошибка: {e}")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -141,89 +113,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("_")
         initiator_id, receiver_id = int(parts[1]), int(parts[2])
         chat_id = query.message.chat.id 
-        
         conn_id = db.get_connection(initiator_id)
         db.create_streak(chat_id, conn_id, initiator_id, receiver_id)
-        
-        await query.edit_message_text(
-            "🔥 <b>Серия начата! День 1.</b>\n\n"
-            "В 00:00 ЕКБ я пришлю кнопку, чтобы продлить огонек.",
-            parse_mode="HTML"
-        )
+        await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>", parse_mode="HTML")
         
         try:
             await context.bot.send_message(
-                chat_id=chat_id,
-                text="🔥 <b>Наш огонек зажжен! День 1.</b>",
-                parse_mode="HTML",
-                business_connection_id=conn_id
+                chat_id=chat_id, text="🔥 <b>Огонек зажжен!</b>",
+                parse_mode="HTML", business_connection_id=conn_id
             )
         except: pass
 
     elif data.startswith("dec_"):
-        await query.edit_message_text("❌ Приглашение отклонено.")
+        await query.edit_message_text("❌ Отклонено.")
 
     elif data == "keep_":
         chat_id = query.message.chat.id
         status, result = db.press_button(chat_id, user.id)
-        
-        if status == "waiting":
-            if result == 1:
-                await query.answer("✅ Ты поддержал огонек!")
-                await query.edit_message_text(
-                    f"⚪ <b>Огонек ждет подтверждения...</b>\n\nНажал(а): {user.first_name}\nСтатус: 1/2",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поддержать (1/2)", callback_data="keep_")]]),
-                    parse_mode="HTML"
-                )
-            else:
-                await query.answer("Ты уже нажал!")
+        if status == "waiting" and result == 1:
+            await query.answer("✅ Ты поддержал огонек!")
+            await query.edit_message_text(
+                f"⚪ <b>Ждем второго...</b>\nСтатус: 1/2",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поддержать (1/2)", callback_data="keep_")]]),
+                parse_mode="HTML"
+            )
         elif status == "success":
             new_streak = result
             await query.message.delete()
             streak = db.get_streak(chat_id)
-            text = f"🔥 <b>Огонек продлен! Серия: {new_streak} дней.</b>"
-            if new_streak in MILESTONES:
-                text = f"🎉 <b>ПОЗДРАВЛЯЕМ! Серия достигла {new_streak} дней!</b>"
             await context.bot.send_message(
-                chat_id=chat_id, text=text, parse_mode="HTML", business_connection_id=streak["connection_id_a"]
+                chat_id=chat_id, text=f"🔥 <b>Серия: {new_streak} дней!</b>",
+                parse_mode="HTML", business_connection_id=streak["connection_id_a"]
             )
 
-    elif data.startswith("restore_"):
-        chat_id = int(data.split("_")[1])
-        streak = db.get_streak(chat_id)
-        if not streak: return
-        
-        if streak["restore_count"] < 3:
-            if db.restore_streak(chat_id, paid=False):
-                await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
-        else:
-            try:
-                await context.bot.send_invoice(
-                    chat_id=chat_id,
-                    title="Восстановление огонька",
-                    description=f"Восстановить серию {streak['streak']} дней за 25 звезд",
-                    payload=f"restore_{chat_id}",
-                    provider_token="",
-                    currency="XTR",
-                    prices=[LabeledPrice(label="Восстановление", amount=25)],
-                    business_connection_id=streak["connection_id_a"]
-                )
-            except Exception as e:
-                logger.error(f"Ошибка счета: {e}")
-
-# ==================== ПЛАТЕЖИ ====================
-
-async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
-
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    payment = update.message.successful_payment
-    if payment.invoice_payload.startswith("restore_"):
-        chat_id = int(payment.invoice_payload.split("_")[1])
-        db.restore_streak(chat_id, paid=True)
-        await update.message.reply_text("🔥 <b>Огонек восстановлен за 25 ⭐!</b>", parse_mode="HTML")
-
-# ==================== CRON (00:00 ЕКБ) ====================
+async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = update.business_connection
+    if conn.is_enabled:
+        db.save_connection(conn.user.id, conn.id)
+        logger.info(f"✅ Подключение: {conn.user.id}")
+    else:
+        db.delete_connection(conn.user.id)
+        logger.info(f"❌ Отключение: {conn.user.id}")
 
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
     for s in db.get_all_streaks():
@@ -264,45 +194,40 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed remind: {e}")
 
-async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    conn = update.business_connection
-    if conn.is_enabled:
-        db.save_connection(conn.user.id, conn.id)
-        logger.info(f"✅ Подключение сохранено: {conn.user.id}")
-    else:
-        conn_db = db.get_conn()
-        conn_db.execute("DELETE FROM user_connections WHERE user_id = ?", (conn.user.id,))
-        conn_db.commit()
-        conn_db.close()
-        logger.info(f"❌ Подключение удалено: {conn.user.id}")
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Ошибка: {context.error}")
 
-# ==================== ЗАПУСК ====================
+# ==================== ЗАПУСК (WEBHOOK) ====================
 
 def main():
-    if not TOKEN:
-        raise ValueError("TELEGRAM_TOKEN is missing!")
+    if not TOKEN: raise ValueError("No token")
+    if not URL: raise ValueError("No RENDER_EXTERNAL_URL")
+    
     db.init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # В личке
+    # Регистрация всех хендлеров
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("l", check_connection))
-    
-    # В бизнес-чате (команда /faier)
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
-    
-    # Остальное
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
-    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    app.add_error_handler(error_handler)
 
+    # Задачи по расписанию
     jq = app.job_queue
     jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
     jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
 
-    logger.info("Bot starting (polling)...")
-    app.run_polling(drop_pending_updates=True)
+    # Запуск через Webhook (Render это любит)
+    logger.info(f"Starting webhook on {URL}")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000)),
+        url_path=TOKEN,
+        webhook_url=f"{URL}/{TOKEN}",
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     main()
