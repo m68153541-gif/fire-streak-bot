@@ -1,5 +1,6 @@
 import os
 import logging
+import sqlite3
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,14 +10,169 @@ from telegram.ext import (
     ContextTypes, filters, BusinessConnectionHandler, PreCheckoutQueryHandler
 )
 
-import database as db
-
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-URL = os.environ.get("RENDER_EXTERNAL_URL") # Render сам подставит сюда твой URL
+URL = os.environ.get("RENDER_EXTERNAL_URL")
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
+DB_PATH = "streaks.db"
+MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
+
+# ==================== БАЗА ДАННЫХ ====================
+
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS streaks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER UNIQUE NOT NULL,
+            connection_id_a TEXT,
+            user_a INTEGER NOT NULL,
+            user_b INTEGER NOT NULL,
+            streak INTEGER DEFAULT 1,
+            is_gray INTEGER DEFAULT 0,
+            gray_since TEXT,
+            restore_count INTEGER DEFAULT 0,
+            active_msg_id INTEGER,
+            user_a_pressed INTEGER DEFAULT 0,
+            user_b_pressed INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_connections (
+            user_id INTEGER PRIMARY KEY,
+            connection_id TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_connection(user_id, connection_id):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO user_connections (user_id, connection_id)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET connection_id = excluded.connection_id
+    """, (user_id, connection_id))
+    conn.commit()
+    conn.close()
+
+def get_connection(user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT connection_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row["connection_id"] if row else None
+
+def delete_connection(user_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def create_streak(chat_id, conn_id, user_a, user_b):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO streaks (chat_id, connection_id_a, user_a, user_b, streak, is_gray)
+        VALUES (?, ?, ?, ?, 1, 0)
+        ON CONFLICT(chat_id) DO UPDATE SET
+            connection_id_a = excluded.connection_id_a,
+            user_a = excluded.user_a,
+            user_b = excluded.user_b,
+            streak = 1,
+            is_gray = 0
+    """, (chat_id, conn_id, user_a, user_b))
+    conn.commit()
+    conn.close()
+
+def get_streak(chat_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM streaks WHERE chat_id = ?", (chat_id,)).fetchone()
+    conn.close()
+    return row
+
+def get_all_streaks():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM streaks").fetchall()
+    conn.close()
+    return rows
+
+def set_gray(chat_id, msg_id=None):
+    conn = get_conn()
+    now = datetime.now(TZ_EKB).isoformat()
+    conn.execute("""
+        UPDATE streaks SET is_gray = 1, gray_since = ?, active_msg_id = ?, user_a_pressed = 0, user_b_pressed = 0 
+        WHERE chat_id = ?
+    """, (now, msg_id, chat_id))
+    conn.commit()
+    conn.close()
+
+def press_button(chat_id, user_id):
+    conn = get_conn()
+    row = get_streak(chat_id)
+    if not row: 
+        conn.close()
+        return None, 0
+
+    if user_id == row["user_a"]:
+        conn.execute("UPDATE streaks SET user_a_pressed = 1 WHERE chat_id = ?", (chat_id,))
+    elif user_id == row["user_b"]:
+        conn.execute("UPDATE streaks SET user_b_pressed = 1 WHERE chat_id = ?", (chat_id,))
+    
+    conn.commit()
+    row = get_streak(chat_id)
+    total_pressed = row["user_a_pressed"] + row["user_b_pressed"]
+    
+    if row["user_a_pressed"] == 1 and row["user_b_pressed"] == 1:
+        new_streak = row["streak"] + 1
+        conn.execute("""
+            UPDATE streaks SET streak = ?, is_gray = 0, gray_since = NULL, active_msg_id = NULL, 
+            user_a_pressed = 0, user_b_pressed = 0 
+            WHERE chat_id = ?
+        """, (new_streak, chat_id))
+        conn.commit()
+        conn.close()
+        return "success", new_streak
+    
+    conn.close()
+    return "waiting", total_pressed
+
+def restore_streak(chat_id, paid=False):
+    conn = get_conn()
+    row = get_streak(chat_id)
+    if not row: 
+        conn.close()
+        return False
+    if row["restore_count"] >= 3 and not paid:
+        conn.close()
+        return False
+    conn.execute("""
+        UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1,
+        active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0
+        WHERE chat_id = ?
+    """, (chat_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+def get_unsent_reminders():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM streaks WHERE is_gray = 1").fetchall()
+    conn.close()
+    return rows
+
+def kill_streak(chat_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM streaks WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
 
 # ==================== ХЕНДЛЕРЫ БОТА ====================
 
@@ -32,7 +188,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    conn_id = db.get_connection(user.id)
+    conn_id = get_connection(user.id)
     
     if not conn_id:
         await update.message.reply_text(
@@ -69,14 +225,14 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = msg.chat.id
     conn_id = msg.business_connection_id
     
-    conn = db.get_conn()
+    conn = get_conn()
     row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
     conn.close()
     if not row: return
         
     owner_id = row["user_id"]
 
-    existing = db.get_streak(chat_id)
+    existing = get_streak(chat_id)
     if existing:
         try:
             await context.bot.send_message(
@@ -113,8 +269,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split("_")
         initiator_id, receiver_id = int(parts[1]), int(parts[2])
         chat_id = query.message.chat.id 
-        conn_id = db.get_connection(initiator_id)
-        db.create_streak(chat_id, conn_id, initiator_id, receiver_id)
+        conn_id = get_connection(initiator_id)
+        create_streak(chat_id, conn_id, initiator_id, receiver_id)
         await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>", parse_mode="HTML")
         
         try:
@@ -129,7 +285,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "keep_":
         chat_id = query.message.chat.id
-        status, result = db.press_button(chat_id, user.id)
+        status, result = press_button(chat_id, user.id)
         if status == "waiting" and result == 1:
             await query.answer("✅ Ты поддержал огонек!")
             await query.edit_message_text(
@@ -140,23 +296,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif status == "success":
             new_streak = result
             await query.message.delete()
-            streak = db.get_streak(chat_id)
+            streak = get_streak(chat_id)
             await context.bot.send_message(
                 chat_id=chat_id, text=f"🔥 <b>Серия: {new_streak} дней!</b>",
                 parse_mode="HTML", business_connection_id=streak["connection_id_a"]
             )
 
+    elif data.startswith("restore_"):
+        chat_id = int(data.split("_")[1])
+        streak = get_streak(chat_id)
+        if not streak: return
+        
+        if streak["restore_count"] < 3:
+            if restore_streak(chat_id, paid=False):
+                await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
+        else:
+            try:
+                await context.bot.send_invoice(
+                    chat_id=chat_id,
+                    title="Восстановление огонька",
+                    description=f"Восстановить серию {streak['streak']} дней за 25 звезд",
+                    payload=f"restore_{chat_id}",
+                    provider_token="",
+                    currency="XTR",
+                    prices=[LabeledPrice(label="Восстановление", amount=25)],
+                    business_connection_id=streak["connection_id_a"]
+                )
+            except Exception as e:
+                logger.error(f"Ошибка счета: {e}")
+
+async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    if payment.invoice_payload.startswith("restore_"):
+        chat_id = int(payment.invoice_payload.split("_")[1])
+        restore_streak(chat_id, paid=True)
+        await update.message.reply_text("🔥 <b>Огонек восстановлен за 25 ⭐!</b>", parse_mode="HTML")
+
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
-        db.save_connection(conn.user.id, conn.id)
+        save_connection(conn.user.id, conn.id)
         logger.info(f"✅ Подключение: {conn.user.id}")
     else:
-        db.delete_connection(conn.user.id)
+        delete_connection(conn.user.id)
         logger.info(f"❌ Отключение: {conn.user.id}")
 
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
-    for s in db.get_all_streaks():
+    for s in get_all_streaks():
         if s["is_gray"] == 1: continue
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать огонек", callback_data="keep_")]])
         try:
@@ -164,15 +353,15 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
                 parse_mode="HTML", reply_markup=keyboard, business_connection_id=s["connection_id_a"]
             )
-            db.set_gray(s["chat_id"], msg.message_id)
+            set_gray(s["chat_id"], msg.message_id)
         except Exception as e:
             logger.error(f"Failed midnight: {e}")
 
 async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
-    for s in db.get_unsent_reminders():
+    for s in get_unsent_reminders():
         if not s["gray_since"]: continue
         if datetime.now(TZ_EKB) - datetime.fromisoformat(s["gray_since"]) > timedelta(days=7):
-            db.kill_streak(s["chat_id"])
+            kill_streak(s["chat_id"])
             try:
                 await context.bot.send_message(chat_id=s["chat_id"], text="💀 <b>Серия окончательно сгорела.</b>", parse_mode="HTML", business_connection_id=s["connection_id_a"])
             except: pass
@@ -197,29 +386,30 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
 
-# ==================== ЗАПУСК (WEBHOOK) ====================
+# ==================== ЗАПУСК ====================
 
 def main():
-    if not TOKEN: raise ValueError("No token")
-    if not URL: raise ValueError("No RENDER_EXTERNAL_URL")
-    
-    db.init_db()
+    if not TOKEN:
+        raise ValueError("TELEGRAM_TOKEN is missing!")
+    if not URL:
+        raise ValueError("RENDER_EXTERNAL_URL is missing!")
+        
+    init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Регистрация всех хендлеров
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("l", check_connection))
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.add_error_handler(error_handler)
 
-    # Задачи по расписанию
     jq = app.job_queue
     jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
     jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
 
-    # Запуск через Webhook (Render это любит)
     logger.info(f"Starting webhook on {URL}")
     app.run_webhook(
         listen="0.0.0.0",
