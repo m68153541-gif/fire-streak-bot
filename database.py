@@ -13,6 +13,8 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+    
+    # Таблица для серий
     c.execute("""
         CREATE TABLE IF NOT EXISTS streaks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,16 +32,20 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Таблица для подключений (сохраняем connection_id)
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_connections (
             user_id INTEGER PRIMARY KEY,
             connection_id TEXT NOT NULL
         )
     """)
+    
     conn.commit()
     conn.close()
 
 def save_connection(user_id, connection_id):
+    """Сохраняет подключение в базу"""
     conn = get_conn()
     conn.execute("""
         INSERT INTO user_connections (user_id, connection_id)
@@ -50,12 +56,21 @@ def save_connection(user_id, connection_id):
     conn.close()
 
 def get_connection(user_id):
+    """Возвращает connection_id или None"""
     conn = get_conn()
     row = conn.execute("SELECT connection_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
     conn.close()
     return row["connection_id"] if row else None
 
+def delete_connection(user_id):
+    """Удаляет подключение"""
+    conn = get_conn()
+    conn.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
 def create_streak(chat_id, conn_id, user_a, user_b):
+    """Создает или обновляет серию"""
     conn = get_conn()
     conn.execute("""
         INSERT INTO streaks (chat_id, connection_id_a, user_a, user_b, streak, is_gray)
@@ -71,6 +86,7 @@ def create_streak(chat_id, conn_id, user_a, user_b):
     conn.close()
 
 def get_streak(chat_id):
+    """Возвращает данные серии"""
     conn = get_conn()
     row = conn.execute("SELECT * FROM streaks WHERE chat_id = ?", (chat_id,)).fetchone()
     conn.close()
@@ -83,6 +99,7 @@ def get_all_streaks():
     return rows
 
 def set_gray(chat_id, msg_id=None):
+    """Делает огонек серым"""
     conn = get_conn()
     now = datetime.now(TZ_EKB).isoformat()
     conn.execute("""
@@ -93,6 +110,7 @@ def set_gray(chat_id, msg_id=None):
     conn.close()
 
 def press_button(chat_id, user_id):
+    """Обрабатывает нажатие кнопки поддержки"""
     conn = get_conn()
     row = get_streak(chat_id)
     if not row: 
@@ -123,6 +141,7 @@ def press_button(chat_id, user_id):
     return "waiting", total_pressed
 
 def restore_streak(chat_id, paid=False):
+    """Восстанавливает серию"""
     conn = get_conn()
     row = get_streak(chat_id)
     if not row: 
