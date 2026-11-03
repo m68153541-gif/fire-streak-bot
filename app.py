@@ -49,19 +49,22 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_connections (
             user_id INTEGER PRIMARY KEY,
-            connection_id TEXT NOT NULL
+            connection_id TEXT NOT NULL,
+            peer_chat_id INTEGER
         )
     """)
     conn.commit()
     conn.close()
 
-def save_connection(user_id, connection_id):
+def save_connection(user_id, connection_id, peer_chat_id=None):
     conn = get_conn()
     conn.execute("""
-        INSERT INTO user_connections (user_id, connection_id)
-        VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET connection_id = excluded.connection_id
-    """, (user_id, connection_id))
+        INSERT INTO user_connections (user_id, connection_id, peer_chat_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET 
+            connection_id = excluded.connection_id,
+            peer_chat_id = COALESCE(excluded.peer_chat_id, user_connections.peer_chat_id)
+    """, (user_id, connection_id, peer_chat_id))
     conn.commit()
     conn.close()
 
@@ -70,6 +73,12 @@ def get_connection(user_id):
     row = conn.execute("SELECT connection_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
     conn.close()
     return row["connection_id"] if row else None
+
+def get_peer_chat_id(user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT peer_chat_id FROM user_connections WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row["peer_chat_id"] if row else None
 
 def delete_connection(user_id):
     conn = get_conn()
@@ -181,10 +190,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши <code>/l</code>, чтобы проверить статус.\n"
+        "2. Напиши <code>/force</code> чтобы узнать ID чата.\n"
         "3. Напиши <code>/faier</code> в чате с другом.",
         parse_mode="HTML"
     )
+
+async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительно вытаскиваем все ID из подключения"""
+    user = update.effective_user
+    conn_id = get_connection(user.id)
+    if not conn_id:
+        await update.message.reply_text("❌ Нет подключения.")
+        return
+    
+    try:
+        conn_info = await context.bot.get_business_connection(conn_id)
+        
+        text = f"<b>ID подключения:</b> {conn_info.id}\n"
+        text += f"<b>ID пользователя:</b> {conn_info.user.id}\n"
+        
+        # Вот оно - user_chat_id!
+        if hasattr(conn_info, 'user_chat_id') and conn_info.user_chat_id:
+            text += f"<b>user_chat_id:</b> <code>{conn_info.user_chat_id}</code>\n"
+            # Сохраняем его в базу на случай, если это ID чата с другом
+            save_connection(user.id, conn_id, conn_info.user_chat_id)
+        else:
+            text += "<b>user_chat_id:</b> не найден\n"
+            
+        if conn_info.rights:
+            text += f"<b>can_reply:</b> {conn_info.rights.can_reply}\n"
+        
+        logger.info(f"FORCE: {text.replace('<b>', '').replace('</b>', '').replace('<code>', '').replace('</code>', '')}")
+        
+        await update.message.reply_text(text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -206,7 +246,8 @@ async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if can_reply:
             await update.message.reply_text(
                 "✅ <b>Бот подключен и готов!</b>\n\n"
-                "Напиши <code>/faier</code> в чате с другом.",
+                "Напиши <code>/force</code> чтобы увидеть ID.\n"
+                "Или <code>/faier</code> в чате с другом.",
                 parse_mode="HTML"
             )
         else:
@@ -219,17 +260,12 @@ async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {e}", parse_mode="HTML")
 
 async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Пытаемся получить сообщение из бизнес-контекста или обычного
     msg = update.business_message or update.message
-    if not msg:
-        return
+    if not msg: return
 
-    # Получаем conn_id (в бизнес-сообщениях он есть, в обычных может отсутствовать)
     conn_id = getattr(msg, "business_connection_id", None)
     
-    # Если это не бизнес-сообщение и нет conn_id — просто выходим
     if not conn_id:
-        # Если команда пришла в личку боту, но не в Business — предупреждаем
         if update.effective_chat.type == "private":
              await context.bot.send_message(
                  chat_id=msg.chat.id,
@@ -238,13 +274,10 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = msg.chat.id
-
     conn = get_conn()
     row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
     conn.close()
-    if not row: 
-        return
-        
+    if not row: return
     owner_id = row["user_id"]
 
     existing = get_streak(chat_id)
@@ -257,7 +290,6 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
-    # Удаляем команду из чата
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
     except: pass
@@ -354,8 +386,9 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
-        save_connection(conn.user.id, conn.id)
-        logger.info(f"✅ Подключение: {conn.user.id}")
+        peer_id = getattr(conn, 'user_chat_id', None)
+        save_connection(conn.user.id, conn.id, peer_id)
+        logger.info(f"✅ Подключение: {conn.user.id}, user_chat_id: {peer_id}")
     else:
         delete_connection(conn.user.id)
         logger.info(f"❌ Отключение: {conn.user.id}")
@@ -414,10 +447,9 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("l", check_connection))
+    app.add_handler(CommandHandler("force", force_check))
     
-    # Ловим бизнес-сообщения
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
-    # Ловим команду /faier как обычную (на случай, если Telegram пришлет её вне бизнес-контекста)
     app.add_handler(CommandHandler("faier", faier_in_chat))
     
     app.add_handler(CallbackQueryHandler(handle_callback))
