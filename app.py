@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, BusinessConnectionHandler, PreCheckoutQueryHandler
@@ -18,70 +18,84 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 MILESTONES = [10, 30, 60, 100, 200, 300, 500, 700, 1000]
 
-USER_STATES = {}
+# ==================== БОТ В ЛИЧКЕ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    await update.message.reply_text(
-        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
-        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши /faier и введи ID друга.",
-        parse_mode="HTML"
-    )
-
-async def faier(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if update.effective_chat.type != "private": return
-        
     conn_id = db.get_connection(user.id)
-    if not conn_id:
-        await update.message.reply_text("❌ Ошибка: Бот не подключен в Business-режиме! Переподключи меня.")
-        return
-
-    USER_STATES[user.id] = {"state": "waiting_id"}
-    await update.message.reply_text("👤 Введи числовой ID друга:")
-
-async def handle_message_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    state_data = USER_STATES.get(user.id)
-    if not state_data or state_data.get("state") != "waiting_id": return
-
-    text = update.message.text.strip()
-    if not text.isdigit():
-        await update.message.reply_text("❌ Введи числовой ID (только цифры).")
-        return
-
-    target_id = int(text)
-    USER_STATES.pop(user.id, None)
-    conn_id = db.get_connection(user.id)
-
-    # Сначала пишем "Отправляю...", чтобы бот не завис
-    status_msg = await update.message.reply_text("⏳ Отправляю приглашение...")
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{target_id}"),
-         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{user.id}")]
-    ])
     
-    try:
-        # Отправляем от твоего имени через Business API
-        await context.bot.send_message(
-            chat_id=target_id, 
-            text=f"🔥 <b>Привет! {user.first_name} предлагает растить огонек дружбы.</b>\n\nНажми кнопку ниже:",
-            parse_mode="HTML", reply_markup=keyboard, business_connection_id=conn_id
+    text = (
+        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
+        "Чтобы начать, выполни два шага:\n"
+        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
+        "2. Напиши команду <code>/faier</code> прямо в чате с другом, с которым хочешь растить огонек."
+    )
+    
+    if conn_id:
+        text = (
+            f"✅ <b>Бот подключен к твоему Business!</b>\n\n"
+            "Теперь напиши команду <code>/faier</code> прямо в чате с другом, с которым хочешь растить огонек."
         )
-        await status_msg.edit_text("✅ Приглашение успешно отправлено!")
-    except Exception as e:
-        logger.error(f"Ошибка отправки: {e}")
-        # Если ошибка BUSINESS_PEER_INVALID, просто выводим её без зависания
-        await status_msg.edit_text(
-            f"❌ Ошибка Telegram: {e}\n\n"
-            "Попробуй переподключить бота в настройках Business и напиши другу, чтобы он ответил на любое твое сообщение."
-        )
+        
+    await update.message.reply_text(text, parse_mode="HTML")
 
-# --- Заглушка для бизнес-сообщений ---
-async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
+# ==================== КОМАНДА /faier В ЧАТЕ С ДРУГОМ ====================
+
+async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Проверяем, что это Business-сообщение (команда в чате с другом)
+    msg = update.business_message
+    if not msg:
+        return
+
+    chat_id = msg.chat.id
+    conn_id = msg.business_connection_id
+    
+    # Находим владельца подключения
+    conn = db.get_conn()
+    row = conn.execute("SELECT user_id FROM user_connections WHERE connection_id = ?", (conn_id,)).fetchone()
+    conn.close()
+    
+    if not row:
+        return
+        
+    owner_id = row["user_id"]
+
+    # Если серия уже есть — сообщаем
+    existing = db.get_streak(chat_id)
+    if existing:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔥 У вас уже есть серия: <b>{existing['streak']} дней</b>.",
+                parse_mode="HTML",
+                business_connection_id=conn_id
+            )
+        except: pass
+        return
+
+    # Удаляем сообщение с командой (если есть права)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+    except: pass
+
+    # Отправляем приглашение с кнопками
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Принять", callback_data=f"acc_{owner_id}_{msg.from_user.id}"),
+         InlineKeyboardButton("❌ Отклонить", callback_data=f"dec_{owner_id}")]
+    ])
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔥 <b>Предложение растить огонек!</b>\n\nНажми «Принять», чтобы начать серию.",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+            business_connection_id=conn_id
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки приглашения: {e}")
+
+# ==================== КНОПКИ ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -110,8 +124,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 business_connection_id=conn_id
             )
-        except Exception as e:
-            logger.error(f"Не удалось отправить авто-сообщение: {e}")
+        except: pass
 
     elif data.startswith("dec_"):
         await query.edit_message_text("❌ Приглашение отклонено.")
@@ -143,8 +156,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("restore_"):
         chat_id = int(data.split("_")[1])
-        if db.restore_streak(chat_id, paid=False):
-            await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
+        streak = db.get_streak(chat_id)
+        if not streak: return
+        
+        if streak["restore_count"] < 3:
+            if db.restore_streak(chat_id, paid=False):
+                await query.edit_message_text("🔥 <b>Огонек восстановлен!</b>", parse_mode="HTML")
+        else:
+            # Отправляем счет на 25 звезд
+            try:
+                await context.bot.send_invoice(
+                    chat_id=chat_id,
+                    title="Восстановление огонька",
+                    description=f"Восстановить серию {streak['streak']} дней за 25 звезд",
+                    payload=f"restore_{chat_id}",
+                    provider_token="",
+                    currency="XTR",
+                    prices=[LabeledPrice(label="Восстановление", amount=25)],
+                    business_connection_id=streak["connection_id_a"]
+                )
+            except Exception as e:
+                logger.error(f"Ошибка счета: {e}")
+
+# ==================== ПЛАТЕЖИ ====================
 
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
@@ -155,6 +189,8 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         chat_id = int(payment.invoice_payload.split("_")[1])
         db.restore_streak(chat_id, paid=True)
         await update.message.reply_text("🔥 <b>Огонек восстановлен за 25 ⭐!</b>", parse_mode="HTML")
+
+# ==================== CRON (00:00 ЕКБ) ====================
 
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
     for s in db.get_all_streaks():
@@ -178,10 +214,16 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=s["chat_id"], text="💀 <b>Серия окончательно сгорела.</b>", parse_mode="HTML", business_connection_id=s["connection_id_a"])
             except: pass
             continue
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")],
-            [InlineKeyboardButton("♻️ Восстановить", callback_data=f"restore_{s['chat_id']}")]
-        ])
+        
+        # Если остались бесплатные восстановления, даем кнопку
+        if s["restore_count"] < 3:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")],
+                [InlineKeyboardButton("♻️ Восстановить", callback_data=f"restore_{s['chat_id']}")]
+            ])
+        else:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
+            
         try:
             await context.bot.send_message(
                 chat_id=s["chat_id"], text="⚪ <b>Напоминание:</b> огонек серый. Пора продлить!",
@@ -202,16 +244,21 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn_db.close()
         logger.info(f"❌ Подключение удалено: {conn.user.id}")
 
+# ==================== ЗАПУСК ====================
+
 def main():
     if not TOKEN:
         raise ValueError("TELEGRAM_TOKEN is missing!")
     db.init_db()
     app = Application.builder().token(TOKEN).build()
 
+    # В личке
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("faier", faier))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message_input))
-    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
+    
+    # В бизнес-чате (команда /faier)
+    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
+    
+    # Остальное
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
