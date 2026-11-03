@@ -187,16 +187,39 @@ def kill_streak(chat_id):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # ПРОВЕРКА: если пришел payload от кнопки управления ботом в чате
+    if context.args and context.args[0].startswith("bizChat"):
+        chat_id_str = context.args[0][7:]  # Отрезаем "bizChat"
+        try:
+            chat_id = int(chat_id_str)
+            logger.info(f"✅ ПОЛУЧЕН CHAT_ID ИЗ КНОПКИ: {chat_id}")
+            
+            # Сохраняем этот chat_id в базу
+            conn = get_conn()
+            conn.execute("UPDATE user_connections SET peer_chat_id = ? WHERE user_id = ?", (chat_id, user.id))
+            conn.commit()
+            conn.close()
+            
+            await update.message.reply_text(
+                f"✅ Я вижу этот чат! ID: <code>{chat_id}</code>\n\n"
+                "Теперь напиши /faier в чате с другом.",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Ошибка в ID чата.")
+        return
+
+    # Обычный старт
     await update.message.reply_text(
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши <code>/force</code> чтобы узнать ID чата.\n"
-        "3. Напиши <code>/faier</code> в чате с другом.",
+        "2. Открой чат с другом и нажми кнопку управления ботом (в шапке чата).\n"
+        "3. После этого напиши <code>/faier</code> в чате с другом.",
         parse_mode="HTML"
     )
 
 async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительно вытаскиваем все ID из подключения"""
     user = update.effective_user
     conn_id = get_connection(user.id)
     if not conn_id:
@@ -205,59 +228,21 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         conn_info = await context.bot.get_business_connection(conn_id)
-        
         text = f"<b>ID подключения:</b> {conn_info.id}\n"
         text += f"<b>ID пользователя:</b> {conn_info.user.id}\n"
         
-        # Вот оно - user_chat_id!
         if hasattr(conn_info, 'user_chat_id') and conn_info.user_chat_id:
             text += f"<b>user_chat_id:</b> <code>{conn_info.user_chat_id}</code>\n"
-            # Сохраняем его в базу на случай, если это ID чата с другом
-            save_connection(user.id, conn_id, conn_info.user_chat_id)
         else:
             text += "<b>user_chat_id:</b> не найден\n"
             
         if conn_info.rights:
             text += f"<b>can_reply:</b> {conn_info.rights.can_reply}\n"
         
-        logger.info(f"FORCE: {text.replace('<b>', '').replace('</b>', '').replace('<code>', '').replace('</code>', '')}")
-        
+        logger.info(f"FORCE: {text}")
         await update.message.reply_text(text, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
-
-async def check_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    conn_id = get_connection(user.id)
-    
-    if not conn_id:
-        await update.message.reply_text(
-            "❌ <b>Бот НЕ подключен к Business.</b>\n\n"
-            "Зайди в Настройки → Telegram Business → Чат-боты и добавь меня.",
-            parse_mode="HTML"
-        )
-        return
-        
-    try:
-        conn_info = await context.bot.get_business_connection(conn_id)
-        rights = conn_info.rights
-        can_reply = rights.can_reply if rights else False
-        
-        if can_reply:
-            await update.message.reply_text(
-                "✅ <b>Бот подключен и готов!</b>\n\n"
-                "Напиши <code>/force</code> чтобы увидеть ID.\n"
-                "Или <code>/faier</code> в чате с другом.",
-                parse_mode="HTML"
-            )
-        else:
-            await update.message.reply_text(
-                "⚠️ <b>Нет права отвечать.</b>\n\n"
-                "Включи «Отвечать на сообщения» в настройках Business.",
-                parse_mode="HTML"
-            )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}", parse_mode="HTML")
 
 async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
@@ -279,6 +264,10 @@ async def faier_in_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     if not row: return
     owner_id = row["user_id"]
+
+    # Проверка, что команду дал владелец
+    if msg.from_user.id != owner_id:
+        return
 
     existing = get_streak(chat_id)
     if existing:
@@ -446,7 +435,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("l", check_connection))
+    app.add_handler(CommandHandler("l", force_check))
     app.add_handler(CommandHandler("force", force_check))
     
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE & filters.COMMAND, faier_in_chat))
