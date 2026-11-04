@@ -26,7 +26,6 @@ URL = os.environ.get("RENDER_EXTERNAL_URL")
 DATABASE_URL = os.environ.get("DATABASE_URL") 
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
-ADMIN_USERNAME = "@fier_zyzabot"
 
 USER_STATES = {}
 api_app = FastAPI()
@@ -67,15 +66,27 @@ def init_db():
             CREATE TABLE IF NOT EXISTS user_connections (
                 user_id BIGINT PRIMARY KEY,
                 connection_id TEXT NOT NULL,
-                peer_chat_id BIGINT,
-                admin_phrase TEXT
+                peer_chat_id BIGINT
             )
         """)
         conn.commit()
         conn.close()
-        logger.info("✅ База данных инициализирована")
+        logger.info("✅ БД инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка БД: {e}")
+
+def save_connection(user_id, connection_id, peer_chat_id=None):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO user_connections (user_id, connection_id, peer_chat_id)
+        VALUES (%s, %s, %s)
+        ON CONFLICT(user_id) DO UPDATE SET 
+            connection_id = EXCLUDED.connection_id,
+            peer_chat_id = COALESCE(EXCLUDED.peer_chat_id, user_connections.peer_chat_id)
+    """, (user_id, connection_id, peer_chat_id))
+    conn.commit()
+    conn.close()
 
 def get_connection(user_id):
     conn = get_conn()
@@ -92,24 +103,6 @@ def get_peer_chat_id(user_id):
     row = c.fetchone()
     conn.close()
     return row["peer_chat_id"] if row else None
-
-def save_peer_chat_id(user_id, peer_chat_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE user_connections SET peer_chat_id = %s WHERE user_id = %s", (peer_chat_id, user_id))
-    conn.commit()
-    conn.close()
-
-def save_connection(user_id, connection_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO user_connections (user_id, connection_id)
-        VALUES (%s, %s)
-        ON CONFLICT(user_id) DO UPDATE SET connection_id = EXCLUDED.connection_id
-    """, (user_id, connection_id))
-    conn.commit()
-    conn.close()
 
 def create_streak(chat_id, conn_id, user_a, user_b):
     conn = get_conn()
@@ -139,6 +132,14 @@ def get_all_streaks():
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_user_streaks(user_id):
+    conn = get_conn()
+    c = conn.cursor(cursor_factory=DictCursor)
+    c.execute("SELECT * FROM streaks WHERE user_a = %s OR user_b = %s ORDER BY streak DESC", (user_id, user_id))
     rows = c.fetchall()
     conn.close()
     return rows
@@ -188,22 +189,6 @@ def press_button(chat_id, user_id):
     conn.close()
     return "waiting", total_pressed
 
-def restore_streak(chat_id, paid=False):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
-    c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
-    row = c.fetchone()
-    if not row: 
-        conn.close()
-        return False
-    if row["restore_count"] >= 3 and not paid:
-        conn.close()
-        return False
-    c.execute("UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1, active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0 WHERE chat_id = %s", (chat_id,))
-    conn.commit()
-    conn.close()
-    return True
-
 def get_unsent_reminders():
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
@@ -219,62 +204,47 @@ def kill_streak(chat_id):
     conn.commit()
     conn.close()
 
-# ==================== API ДЛЯ MINI APP ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
-@api_app.get("/api/get_data")
-async def get_web_data(user_id: int):
-    """Отдает данные для веб-приложения"""
-    streaks = get_all_streaks()
-    user_streaks = [dict(s) for s in streaks if s['user_a'] == user_id or s['user_b'] == user_id]
-    return {"streaks": user_streaks, "user_id": user_id}
+async def get_username(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    """Превращает ID в @username или имя"""
+    try:
+        chat = await context.bot.get_chat(user_id)
+        if chat.username:
+            return f"@{chat.username}"
+        return chat.first_name
+    except:
+        return f"ID:{user_id}"
 
-@api_app.post("/api/sync")
-async def sync_web_data(data: dict):
-    """Принимает тапы из веб-приложения и обновляет БД"""
-    user_id = data.get("user_id")
-    taps = data.get("taps", 0)
-    if not user_id or not taps: return {"status": "error"}
-    
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        UPDATE streaks 
-        SET total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END,
-            total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END
-        WHERE user_a = %s OR user_b = %s
-    """, (user_id, taps, user_id, taps, user_id, user_id))
-    conn.commit()
-    conn.close()
-    return {"status": "ok"}
-
-# ==================== ХЕНДЛЕРЫ БОТА ====================
+# ==================== ХЕНДЛЕРЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if context.args and context.args[0].startswith("bizChat"):
-        chat_id_str = context.args[0][7:]
         try:
-            chat_id = int(chat_id_str)
-            save_peer_chat_id(user.id, chat_id)
+            chat_id = int(context.args[0][7:])
+            save_connection(user.id, get_connection(user.id), chat_id)
             await update.message.reply_text(f"✅ Я запомнил этот чат (ID: {chat_id}).\n\nТеперь напиши /send.")
-        except ValueError:
-            pass
+        except: pass
         return
 
-    web_app_url = f"{URL}/webapp/index.html"
+    # Возвращаем полную инструкцию, а кнопку Mini App убираем вниз
+    text = (
+        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
+        "<b>Инструкция по запуску огонька:</b>\n\n"
+        "1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → добавь @fier_zyzabot. Включи ВСЕ права (Читать, Отвечать).\n\n"
+        "2️⃣ <b>Вызови меня в чате:</b> В чате с другом нажми на 3 полоски вверху → Управление → выбери меня.\n\n"
+        "3️⃣ <b>Вернись сюда и напиши /send.</b>\n\n"
+        "4️⃣ <b>Когда друг примет приглашение</b>, начнется серия. В 00:00 по ЕКБ жди кнопку «Поддержать».\n\n"
+        "⚠️ Если друг недавно не писал, Telegram может выдать ошибку. Попроси его написать тебе."
+    )
+    
+    # Кнопка Mini App теперь отдельно, чтобы не мешать инструкции
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔥 Открыть моего Огонька", web_app=WebAppInfo(url=web_app_url))],
+        [InlineKeyboardButton("⚙️ Перейти к подключению", url="tg://settings/edit")],
         [InlineKeyboardButton("📖 Все команды", callback_data="help")]
     ])
-    
-    await update.message.reply_text(
-        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
-        "1. Подключи меня в <b>Настройки → Telegram Business → Чат-боты</b>.\n"
-        "2. Напиши <code>/send</code>.\n"
-        "3. Нажми кнопку ниже, чтобы посмотреть на своего огонька!",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)"
@@ -282,11 +252,7 @@ async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
-    c.execute("SELECT * FROM streaks WHERE user_a = %s OR user_b = %s ORDER BY streak DESC", (user.id, user.id))
-    streaks = c.fetchall()
-    conn.close()
+    streaks = get_user_streaks(user.id)
     
     if not streaks:
         await update.message.reply_text("❌ У вас пока нет активных огоньков.")
@@ -295,7 +261,8 @@ async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔥 <b>Ваши огоньки:</b>\n\n"
     for s in streaks:
         partner_id = s["user_b"] if s["user_a"] == user.id else s["user_a"]
-        text += f"ID: {partner_id} — <b>Серия: {s['streak']} дней</b>\n"
+        partner_name = await get_username(context, partner_id) # Получаем ник
+        text += f"{partner_name} — <b>Серия: {s['streak']} дней</b>\n"
             
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -307,15 +274,16 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streaks = get_all_streaks()
     text = "👑 <b>Все огоньки:</b>\n\n"
     for s in streaks:
-        text += f"{s['user_a']} ↔️ {s['user_b']} (Серия: {s['streak']}, Тапы: {s['total_taps_a']}/{s['total_taps_b']})\n"
+        name_a = await get_username(context, s["user_a"])
+        name_b = await get_username(context, s["user_b"])
+        text += f"{name_a} ↔️ {name_b} (Серия: {s['streak']}, Тапы: {s['total_taps_a']}/{s['total_taps_b']})\n"
     await update.message.reply_text(text[:4000], parse_mode="HTML")
 
 async def adm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Нет прав.")
-        return
+        return await update.message.reply_text("⛔ Нет прав.")
     USER_STATES[update.effective_user.id] = {"state": "waiting_admin_phrase"}
-    await update.message.reply_text("👑 Введите фразу для рассылки во все чаты:")
+    await update.message.reply_text("👑 Введите фразу для рассылки:")
 
 async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -326,6 +294,7 @@ async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
     phrase = update.message.text.strip()
     USER_STATES.pop(user.id, None)
     
+    # ИСПРАВЛЕНО: Берем все чаты из БД, а не только один
     streaks = get_all_streaks()
     count = 0
     for s in streaks:
@@ -334,7 +303,9 @@ async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
                 chat_id=s["chat_id"], text=phrase, business_connection_id=s["connection_id_a"]
             )
             count += 1
-        except: pass
+        except Exception as e:
+            logger.error(f"Ошибка отправки в {s['chat_id']}: {e}")
+            
     await update.message.reply_text(f"✅ Отправлено в {count} чатов.")
 
 async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -371,6 +342,7 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
     if not msg: return
+    
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT user_id FROM user_connections WHERE connection_id = %s", (msg.business_connection_id,))
@@ -422,20 +394,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_streak = result
             await query.message.delete()
             streak = get_streak(chat_id)
-            web_app_url = f"{URL}/webapp/index.html"
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Посмотреть огонька", web_app=WebAppInfo(url=web_app_url))]])
             await context.bot.send_message(
                 chat_id=chat_id, text=f"🔥 <b>Серия: {new_streak} дней!</b>",
-                parse_mode="HTML", business_connection_id=streak["connection_id_a"], reply_markup=kb
+                parse_mode="HTML", business_connection_id=streak["connection_id_a"]
             )
-
-    elif data.startswith("restore_"):
-        chat_id = int(data.split("_")[1])
-        streak = get_streak(chat_id)
-        if not streak: return
-        if streak["restore_count"] < 3:
-            if restore_streak(chat_id, paid=False):
-                await query.edit_message_text("🔥 <b>Восстановлено!</b>", parse_mode="HTML")
 
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
@@ -450,20 +412,11 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
     for s in get_all_streaks():
         if s["is_gray"] == 1: continue
-        taps_a = s["total_taps_a"] or 0
-        taps_b = s["total_taps_b"] or 0
-        if taps_a > 100 and taps_a > taps_b * 3:
-            try:
-                await context.bot.send_message(
-                    chat_id=s["chat_id"], text="⚠️ <b>Ваш друг один растит огонька!</b> Помогите ему в Mini App!",
-                    parse_mode="HTML", business_connection_id=s["connection_id_a"]
-                )
-            except: pass
-
+        
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
             msg = await context.bot.send_message(
-                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>",
+                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
                 reply_markup=keyboard, business_connection_id=s["connection_id_a"]
             )
             set_gray(s["chat_id"], msg.message_id)
@@ -474,10 +427,8 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
         if not s["gray_since"]: continue
         if datetime.now(TZ_EKB) - datetime.fromisoformat(s["gray_since"]) > timedelta(days=7):
             kill_streak(s["chat_id"])
-            try:
-                await context.bot.send_message(chat_id=s["chat_id"], text="💀 <b>Серия сгорела.</b>", business_connection_id=s["connection_id_a"])
-            except: pass
             continue
+        
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
             await context.bot.send_message(chat_id=s["chat_id"], text="⚪ Напоминание: огонек серый!", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
@@ -494,7 +445,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ЗАПУСК ====================
 
-# Настройка раздачи статики для Mini App
 api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
 
 @api_app.get("/")
