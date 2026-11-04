@@ -259,7 +259,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)"
+    text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)\n/test_midnight - Тест таймера"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -350,6 +350,15 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
+# НОВАЯ КОМАНДА ДЛЯ ТЕСТА ТАЙМЕРА
+async def test_midnight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ Нет прав.")
+    
+    await update.message.reply_text("🧪 Запускаю тест таймера (check_midnight)...")
+    await check_midnight(context)
+    await update.message.reply_text("✅ Тест завершен. Проверь чаты.")
+
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
     if not msg: 
@@ -365,7 +374,6 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
         return
     owner_id = row["user_id"]
     
-    # Считаем ТОЛЬКО сообщения владельца
     if msg.from_user.id != owner_id: 
         return
         
@@ -396,7 +404,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     if data == "help":
-        await query.message.edit_text("📋 Команды: /start, /send, /myfaier, /l, /adm", parse_mode="HTML")
+        await query.message.edit_text("📋 Команды: /start, /send, /myfaier, /l, /adm, /test_midnight", parse_mode="HTML")
         return
         
     if data.startswith("acc_"):
@@ -441,11 +449,13 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
             msg = await context.bot.send_message(
-                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку:",
+                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
                 reply_markup=keyboard, business_connection_id=s["connection_id_a"]
             )
             set_gray(s["chat_id"], msg.message_id)
-        except Exception as e: logger.error(f"Failed midnight: {e}")
+            logger.info(f"✅ Отправлено сообщение о сером огоньке в {s['chat_id']}")
+        except Exception as e: 
+            logger.error(f"Failed midnight: {e}")
 
 async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
     for s in get_unsent_reminders():
@@ -459,11 +469,19 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=s["chat_id"], text="⚪ Напоминание: огонек серый!", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
         except: pass
 
+# АВТООБНОВЛЕНИЕ ПРИ ПОДКЛЮЧЕНИИ
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
         save_connection(conn.user.id, conn.id)
-        logger.info(f"✅ Подключение: {conn.user.id}")
+        
+        db_conn = get_conn()
+        c = db_conn.cursor()
+        c.execute("UPDATE streaks SET connection_id_a = %s WHERE user_a = %s", (conn.id, conn.user.id))
+        db_conn.commit()
+        db_conn.close()
+        
+        logger.info(f"✅ Подключение и обновление серий: {conn.user.id}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
@@ -477,6 +495,7 @@ application.add_handler(CommandHandler("admin", admin_command))
 application.add_handler(CommandHandler("adm", adm_command))
 application.add_handler(CommandHandler("send", send_invite_command))
 application.add_handler(CommandHandler("l", force_check))
+application.add_handler(CommandHandler("test_midnight", test_midnight_command))
 
 application.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
 application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
@@ -512,7 +531,13 @@ async def on_startup():
     await application.initialize()
     await application.bot.set_webhook(f"{URL}/{TOKEN}")
     await application.start()
-    logger.info("✅ Бот запущен")
+    
+    # Планировщик
+    jq = application.job_queue
+    jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
+    jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
+    
+    logger.info("✅ Бот запущен и таймеры установлены")
 
 @api_app.on_event("shutdown")
 async def on_shutdown():
