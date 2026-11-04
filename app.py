@@ -31,11 +31,10 @@ USER_STATES = {}
 # Создаем FastAPI приложение
 api_app = FastAPI()
 
-# Создаем бота (без запуска сервера)
+# Создаем бота
 application = Application.builder().token(TOKEN).build()
 
 # ==================== БАЗА ДАННЫХ ====================
-# (Все функции базы данных остаются без изменений, я их не трогаю)
 
 def get_conn():
     url = DATABASE_URL
@@ -444,26 +443,8 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
 
-# ==================== WEBHOOK ОБРАБОТЧИК (FastAPI) ====================
+# ==================== РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ====================
 
-@api_app.post(f"/{TOKEN}")
-async def telegram_webhook(request: Request):
-    """Принимает обновления от Telegram"""
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return Response(status_code=200)
-
-# ==================== ЗАПУСК ====================
-
-# Раздача статики
-api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
-
-@api_app.get("/")
-async def root():
-    return FileResponse("webapp/index.html")
-
-# Регистрируем хендлеры бота
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
 application.add_handler(CommandHandler("myfaier", myfaier_command))
@@ -481,19 +462,36 @@ application.add_handler(PreCheckoutQueryHandler(pre_checkout))
 application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 application.add_error_handler(error_handler)
 
+# ==================== WEBHOOK ====================
+
+@api_app.post(f"/{TOKEN}")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return Response(status_code=200)
+
+# ==================== СТАТИКА ====================
+
+api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
+
+@api_app.get("/")
+async def root():
+    return FileResponse("webapp/index.html")
+
+# ==================== ЗАПУСК ====================
+
+@api_app.on_event("startup")
 async def on_startup():
-    """При запуске сервера: инициализируем БД и ставим вебхук"""
     init_db()
     await application.initialize()
     await application.bot.set_webhook(f"{URL}/{TOKEN}")
     await application.start()
     logger.info("✅ Бот запущен и вебхук установлен")
 
+@api_app.on_event("shutdown")
 async def on_shutdown():
     await application.stop()
-
-api_app.add_event_handler("startup", on_startup)
-api_app.add_event_handler("shutdown", on_shutdown)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
