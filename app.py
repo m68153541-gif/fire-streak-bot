@@ -5,7 +5,6 @@ from psycopg2.extras import DictCursor
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
-import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
@@ -104,7 +103,6 @@ def save_peer_chat_id(user_id, peer_chat_id):
     conn.close()
 
 def get_all_user_streaks(user_id):
-    """Возвращает список всех серий, где участник = user_id"""
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE user_a = %s OR user_b = %s ORDER BY streak DESC", (user_id, user_id))
@@ -212,6 +210,18 @@ def kill_streak(chat_id):
     conn.commit()
     conn.close()
 
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
+
+async def get_username(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    """Превращает ID в @username или имя"""
+    try:
+        chat = await context.bot.get_chat(user_id)
+        if chat.username:
+            return f"@{chat.username}"
+        return chat.first_name
+    except:
+        return f"ID:{user_id}"
+
 # ==================== ХЕНДЛЕРЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,27 +240,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Красивая инструкция со ссылкой на подключение
     text = (
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "<b>Инструкция по запуску:</b>\n\n"
-        f"1️⃣ <b>Подключи меня:</b> Нажми на кнопку ниже, чтобы перейти к подключению <b>{BOT_USERNAME}</b>.\n"
-        "Включи <b>ВСЕ разрешения</b> (особенно «Читать сообщения» и «Отвечать на сообщения»).\n\n"
-        "2️⃣ <b>Вызови меня в чате:</b> Открой чат с другом → нажми на <b>три полоски (меню)</b> → <b>Управление</b> → выбери меня. (Или просто напиши <code>/start</code> в этом чате).\n\n"
+        f"1️⃣ <b>Подключи меня:</b> Нажми на кнопку ниже. В открывшемся окне выбери <b>«Чат-боты»</b>, добавь <b>{BOT_USERNAME}</b> и включи <b>ВСЕ разрешения</b>.\n\n"
+        "2️⃣ <b>Вызови меня в чате:</b> Открой чат с другом → нажми на <b>три полоски</b> вверху справа → <b>«Перейти к управлению»</b> → выбери меня.\n\n"
         "3️⃣ <b>Вернись сюда и напиши</b> <code>/send</code>, чтобы отправить приглашение.\n\n"
-        "4️⃣ <b>Когда друг примет</b>, начнется серия! В 00:00 по ЕКБ жди кнопку «Поддержать».\n\n"
-        "⚠️ Если друг недавно не писал, Telegram выдаст ошибку. Попроси его написать тебе."
+        "4️⃣ <b>Друг должен написать тебе</b> любое сообщение после подключения, чтобы Telegram разрешил боту отправить приглашение.\n\n"
+        "5️⃣ <b>Когда друг примет</b>, начнется серия! В 00:00 по ЕКБ жди кнопку «Поддержать»."
     )
     
-    # Ссылка на настройки Business
+    # Ссылка на управление чат-ботами (deep link)
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚙️ Перейти к подключению", url="tg://settings/business")],
+        [InlineKeyboardButton("⚙️ Перейти к подключению", url="tg://settings/edit")],
         [InlineKeyboardButton("📖 Все команды", callback_data="help")]
     ])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /com - список всех команд"""
     text = (
         "📋 <b>Список всех команд:</b>\n\n"
         "🔥 <code>/start</code> — Главная инструкция\n"
@@ -264,7 +271,6 @@ async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /myfaier - список всех огоньков"""
     user = update.effective_user
     streaks = get_all_user_streaks(user.id)
     
@@ -274,12 +280,13 @@ async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     text = "🔥 <b>Ваши огоньки:</b>\n\n"
     for s in streaks:
-        # Определяем, кто из участников ты, а кто друг
         if s["user_a"] == user.id:
-            # Нужно получить юзернейм друга, но в БД его нет. Выведем хотя бы ID.
-            text += f"👤 ID: {s['user_b']} — <b>Серия: {s['streak']} дней</b>\n"
+            partner_id = s["user_b"]
         else:
-            text += f"👤 ID: {s['user_a']} — <b>Серия: {s['streak']} дней</b>\n"
+            partner_id = s["user_a"]
+            
+        partner_name = await get_username(context, partner_id)
+        text += f"{partner_name} — <b>Серия: {s['streak']} дней</b>\n"
             
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -296,9 +303,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     text = "👑 <b>Все огоньки в базе:</b>\n\n"
     for s in streaks:
-        text += f"{s['user_a']} ↔️ {s['user_b']} (Серия: {s['streak']})\n"
+        name_a = await get_username(context, s["user_a"])
+        name_b = await get_username(context, s["user_b"])
+        text += f"{name_a} ↔️ {name_b} (Серия: {s['streak']})\n"
         
-    # Разбиваем на куски, если сообщение слишком длинное
     for i in range(0, len(text), 4000):
         await update.message.reply_text(text[i:i+4000], parse_mode="HTML")
 
@@ -349,7 +357,7 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
-# ==================== ОБРАБОТКА КНОПОК ====================
+# ==================== CALLBACKS ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -365,8 +373,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "👤 <code>/myfaier</code> — Мои огоньки\n"
             "🔍 <code>/l</code> — Проверить статус подключения\n"
             "⚙️ <code>/com</code> — Этот список команд\n"
-            "👑 <code>/admin</code> — Панель администратора (только для создателя)\n\n"
-            "💡 <i>Подсказка:</i> Команды /l и /send работают только в личке с ботом.",
+            "👑 <code>/admin</code> — Панель администратора\n\n",
             parse_mode="HTML"
         )
         return
@@ -380,8 +387,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             await query.edit_message_text("🔥 <b>Серия начата! День 1.</b>", parse_mode="HTML")
-        except Exception:
-            pass # Игнорируем ошибку, если сообщение не изменилось
+        except: pass
             
         try:
             await context.bot.send_message(
@@ -395,16 +401,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Отклонено.")
         except: pass
 
-    elif data == "keep_":
-        chat_id = query.message.chat.id
+    elif data.startswith("keep_"):
+        if len(data.split("_")) > 1:
+            chat_id = int(data.split("_")[1])
+        else:
+            chat_id = query.message.chat.id
+            
         status, result = press_button(chat_id, user.id)
         if status == "waiting" and result == 1:
             await query.answer("✅ Ты поддержал огонек!")
-            await query.edit_message_text(
-                f"⚪ <b>Ждем второго...</b>\nСтатус: 1/2",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поддержать (1/2)", callback_data="keep_")]]),
-                parse_mode="HTML"
-            )
+            if len(data.split("_")) > 1:
+                await query.edit_message_text("✅ Вы поддержали огонек. Ждем второго собеседника.")
+            else:
+                await query.edit_message_text(
+                    f"⚪ <b>Ждем второго...</b>\nСтатус: 1/2",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поддержать (1/2)", callback_data="keep_")]]),
+                    parse_mode="HTML"
+                )
         elif status == "success":
             new_streak = result
             await query.message.delete()
@@ -433,7 +446,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка счета: {e}")
 
-# ==================== ПЛАТЕЖИ ====================
+# ==================== ПЛАТЕЖИ И ФОНОВЫЕ ЗАДАЧИ ====================
 
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
@@ -445,29 +458,13 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         restore_streak(chat_id, paid=True)
         await update.message.reply_text("🔥 <b>Огонек восстановлен за 25 ⭐!</b>", parse_mode="HTML")
 
-# ==================== АВТО-ПОДКЛЮЧЕНИЕ И РАНДОМ ====================
-
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
         save_connection(conn.user.id, conn.id, getattr(conn, 'user_chat_id', None))
         logger.info(f"✅ Подключение: {conn.user.id}")
     else:
-        # Удалять из базы не будем, чтобы не терять связь при перезапуске
         logger.info(f"❌ Отключение: {conn.user.id}")
-
-async def auto_reconnect(context: ContextTypes.DEFAULT_TYPE):
-    """Сюрприз 1: Восстанавливаем connection_id после перезапуска, чтобы бот не забывал подключение"""
-    logger.info("🔄 Проверка подключений...")
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
-    c.execute("SELECT user_id FROM user_connections")
-    users = c.fetchall()
-    conn.close()
-    
-    # В Telegram API нет метода получить список подключений. 
-    # Мы просто напомним боту, что база в порядке.
-    logger.info(f"В базе сохранено {len(users)} подключений.")
 
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
     for s in get_all_streaks():
@@ -509,7 +506,6 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed remind: {e}")
 
 async def send_random_phrases(context: ContextTypes.DEFAULT_TYPE):
-    """Сюрприз 2: Рандомные милые сообщения 4-5 раз в сутки"""
     phrases = [
         "Ваша серия огонька прекрасна! 🔥",
         "Вы мои лучшие хозяева! ❤️",
@@ -519,23 +515,19 @@ async def send_random_phrases(context: ContextTypes.DEFAULT_TYPE):
     ]
     
     all_streaks = get_all_streaks()
-    
-    # Отправляем в случайные чаты
     random.shuffle(all_streaks)
-    # Берем примерно 1/4 от всех, чтобы распределить на 4-5 раз в день
     chunks = [all_streaks[i:i + max(1, len(all_streaks)//4)] for i in range(0, len(all_streaks), max(1, len(all_streaks)//4))]
     
     if not chunks: return
-    
-    # Выбираем случайный кусок (один раз в 4-6 часов)
     current_chunk = random.choice(chunks)
     
     for s in current_chunk:
-        # Если это чат админа (сюрприз 3), шлем чаще
+        # Для админа фраза "Вы такие милые, когда разговариваете! 💬" выпадает чаще в 1.5-2 раза
         if s["user_a"] == ADMIN_ID or s["user_b"] == ADMIN_ID:
-            phrase = random.choice(phrases)
+            # Взвешенный рандом: 3/7 шанс на нужную фразу, вместо 1/5
+            phrase = random.choices(phrases, weights=[1, 1, 1, 3, 1], k=1)[0]
         else:
-            phrase = random.choice(phrases[:3]) # Обычным юзерам только первые 3
+            phrase = random.choice(phrases)
             
         try:
             await context.bot.send_message(
@@ -553,7 +545,6 @@ def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
 
-    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("com", com_command))
     app.add_handler(CommandHandler("myfaier", myfaier_command))
@@ -561,19 +552,15 @@ def main():
     app.add_handler(CommandHandler("send", send_invite_command))
     app.add_handler(CommandHandler("l", force_check))
     
-    # Кнопки и платежи
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(BusinessConnectionHandler(on_business_connect))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.add_error_handler(error_handler)
 
-    # Расписание (Cron)
     jq = app.job_queue
     jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
     jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
-    
-    # Рандомные сообщения (4-5 раз в день = каждые 5 часов)
     jq.run_repeating(send_random_phrases, interval=timedelta(hours=5), first=1800)
 
     logger.info(f"Starting webhook on {URL}")
