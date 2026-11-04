@@ -5,14 +5,13 @@ from psycopg2.extras import DictCursor
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
-import threading
 import uvicorn
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, BusinessConnectionHandler, PreCheckoutQueryHandler
@@ -28,9 +27,15 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
 
 USER_STATES = {}
+
+# Создаем FastAPI приложение
 api_app = FastAPI()
 
+# Создаем бота (без запуска сервера)
+application = Application.builder().token(TOKEN).build()
+
 # ==================== БАЗА ДАННЫХ ====================
+# (Все функции базы данных остаются без изменений, я их не трогаю)
 
 def get_conn():
     url = DATABASE_URL
@@ -207,7 +212,6 @@ def kill_streak(chat_id):
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
 async def get_username(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
-    """Превращает ID в @username или имя"""
     try:
         chat = await context.bot.get_chat(user_id)
         if chat.username:
@@ -228,7 +232,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         return
 
-    # Возвращаем полную инструкцию, а кнопку Mini App убираем вниз
     text = (
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "<b>Инструкция по запуску огонька:</b>\n\n"
@@ -239,7 +242,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ Если друг недавно не писал, Telegram может выдать ошибку. Попроси его написать тебе."
     )
     
-    # Кнопка Mini App теперь отдельно, чтобы не мешать инструкции
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚙️ Перейти к подключению", url="tg://settings/edit")],
         [InlineKeyboardButton("📖 Все команды", callback_data="help")]
@@ -261,7 +263,7 @@ async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🔥 <b>Ваши огоньки:</b>\n\n"
     for s in streaks:
         partner_id = s["user_b"] if s["user_a"] == user.id else s["user_a"]
-        partner_name = await get_username(context, partner_id) # Получаем ник
+        partner_name = await get_username(context, partner_id)
         text += f"{partner_name} — <b>Серия: {s['streak']} дней</b>\n"
             
     await update.message.reply_text(text, parse_mode="HTML")
@@ -294,7 +296,6 @@ async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
     phrase = update.message.text.strip()
     USER_STATES.pop(user.id, None)
     
-    # ИСПРАВЛЕНО: Берем все чаты из БД, а не только один
     streaks = get_all_streaks()
     count = 0
     for s in streaks:
@@ -443,55 +444,57 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
 
+# ==================== WEBHOOK ОБРАБОТЧИК (FastAPI) ====================
+
+@api_app.post(f"/{TOKEN}")
+async def telegram_webhook(request: Request):
+    """Принимает обновления от Telegram"""
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return Response(status_code=200)
+
 # ==================== ЗАПУСК ====================
 
+# Раздача статики
 api_app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp")
 
 @api_app.get("/")
 async def root():
     return FileResponse("webapp/index.html")
 
-def main():
-    if not TOKEN or not URL or not DATABASE_URL:
-        logger.error("Не заданы переменные окружения")
-        return
-        
+# Регистрируем хендлеры бота
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("com", com_command))
+application.add_handler(CommandHandler("myfaier", myfaier_command))
+application.add_handler(CommandHandler("admin", admin_command))
+application.add_handler(CommandHandler("adm", adm_command))
+application.add_handler(CommandHandler("send", send_invite_command))
+application.add_handler(CommandHandler("l", force_check))
+
+application.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
+application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
+
+application.add_handler(CallbackQueryHandler(handle_callback))
+application.add_handler(BusinessConnectionHandler(on_business_connect))
+application.add_handler(PreCheckoutQueryHandler(pre_checkout))
+application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+application.add_error_handler(error_handler)
+
+async def on_startup():
+    """При запуске сервера: инициализируем БД и ставим вебхук"""
     init_db()
-    app = Application.builder().token(TOKEN).build()
+    await application.initialize()
+    await application.bot.set_webhook(f"{URL}/{TOKEN}")
+    await application.start()
+    logger.info("✅ Бот запущен и вебхук установлен")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("com", com_command))
-    app.add_handler(CommandHandler("myfaier", myfaier_command))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("adm", adm_command))
-    app.add_handler(CommandHandler("send", send_invite_command))
-    app.add_handler(CommandHandler("l", force_check))
-    
-    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
-    
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(BusinessConnectionHandler(on_business_connect))
-    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-    app.add_error_handler(error_handler)
+async def on_shutdown():
+    await application.stop()
 
-    jq = app.job_queue
-    jq.run_daily(check_midnight, time=time(0, 0, tzinfo=TZ_EKB))
-    jq.run_repeating(remind_gray, interval=timedelta(hours=2), first=60)
-
-    port = int(os.environ.get("PORT", 10000))
-    def run_web():
-        uvicorn.run(api_app, host="0.0.0.0", port=port)
-    
-    threading.Thread(target=run_web, daemon=True).start()
-
-    logger.info(f"Starting webhook on {URL}")
-    app.run_webhook(
-        listen="0.0.0.0", port=port,
-        url_path=TOKEN, webhook_url=f"{URL}/{TOKEN}", drop_pending_updates=True,
-        allowed_updates=["message", "callback_query", "business_connection", "business_message", "edited_business_message", "deleted_business_messages"]
-    )
+api_app.add_event_handler("startup", on_startup)
+api_app.add_event_handler("shutdown", on_shutdown)
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(api_app, host="0.0.0.0", port=port)
