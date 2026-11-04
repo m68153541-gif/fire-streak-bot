@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мой Огонек</title>
+    <!-- Подключаем Telegram Web App API -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&display=swap');
+        body { margin: 0; overflow: hidden; background: #1a1a2e; font-family: 'Nunito', sans-serif; transition: background 0.5s; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; outline: none; }
+        
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; }
+        
+        /* Верхняя панель */
+        .top-bar { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 30px; }
+        .currency-panel { background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 25px; display: flex; align-items: center; gap: 10px; color: #ffd700; font-weight: 900; font-size: 22px; pointer-events: auto; backdrop-filter: blur(10px); border: 1px solid rgba(255,215,0,0.3); box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        
+        /* Профили */
+        .profile-container { display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; position: relative; }
+        .profile-label { color: #aaa; font-size: 12px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }
+        .avatar-circle { width: 60px; height: 60px; border-radius: 50%; background: rgba(255,255,255,0.1); backdrop-filter: blur(5px); border: 3px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 24px; color: white; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: 0.3s; }
+        .profile-container.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 20px rgba(255, 215, 0, 0.6); background: rgba(255, 215, 0, 0.2); transform: scale(1.1); }
+        .profile-name { color: #ddd; margin-top: 5px; font-size: 14px; font-weight: bold; }
+        .profile-container.active .profile-name { color: white; }
+        
+        /* Подсказка */
+        .arrow-hint { position: absolute; top: 100px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; color: rgba(255,255,255,0.6); animation: bounce 1.5s infinite; pointer-events: none; }
+        .arrow-hint span { font-size: 16px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;}
+        .arrow-hint svg { width: 30px; height: 30px; fill: currentColor; }
+        @keyframes bounce { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(10px); } }
+        
+        /* Центр */
+        .center-info { position: absolute; top: 30%; width: 100%; text-align: center; pointer-events: none; z-index: 5; }
+        .fire-name { font-size: 34px; font-weight: 900; color: white; text-shadow: 0 4px 15px rgba(0,0,0,0.8); cursor: pointer; pointer-events: auto; display: inline-block; padding: 5px 20px; border-radius: 15px; transition: background 0.2s; }
+        .fire-name:hover { background: rgba(255,255,255,0.1); }
+        .fire-days { font-size: 20px; font-weight: 800; color: #ffd700; text-shadow: 0 2px 10px rgba(0,0,0,0.8); margin-top: 8px; letter-spacing: 0.5px;}
+        
+        /* Всплывающее сообщение */
+        .speech-bubble { 
+            position: absolute; top: 15%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 15px 25px; border-radius: 20px; font-size: 20px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; text-align: center;
+        }
+        .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
+        
+        /* Нижняя панель */
+        .bottom-panel { padding: 15px 20px; display: flex; flex-direction: column; gap: 15px; pointer-events: auto; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); }
+        .friends-row { display: flex; gap: 10px; overflow-x: auto; padding: 10px 0; justify-content: center; }
+        .friend-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.5; transition: 0.2s; min-width: 60px; }
+        .friend-item.active { opacity: 1; transform: scale(1.1); }
+        .friend-item .avatar-circle { width: 50px; height: 50px; font-size: 20px; margin-bottom: 5px; }
+        .friend-item .profile-name { font-size: 12px; margin-top: 0; }
+        
+        .action-buttons { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+        .action-btn { background: linear-gradient(135deg, #3390ec, #0056b3); color: white; border: none; padding: 10px 20px; border-radius: 15px; font-size: 14px; font-weight: 900; cursor: pointer; box-shadow: 0 5px 15px rgba(0, 86, 179, 0.4); transition: 0.2s; pointer-events: auto; }
+        .action-btn:hover { transform: translateY(-2px); }
+        .action-btn.gold { background: linear-gradient(135deg, #ffd700, #ff8c00); box-shadow: 0 5px 15px rgba(255, 140, 0, 0.4); color: #333; }
+        
+        /* Каталог */
+        .catalog-panel { position: absolute; top: 0; right: -320px; width: 280px; height: 100%; background: rgba(20, 20, 30, 0.95); backdrop-filter: blur(15px); transition: right 0.3s; pointer-events: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 20; }
+        .catalog-panel.open { right: 0; }
+        .catalog-header { display: flex; justify-content: space-between; color: white; margin-bottom: 10px;}
+        .close-btn { background: none; border: none; color: white; font-size: 24px; cursor: pointer; }
+        .catalog-item { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 15px; display: flex; align-items: center; gap: 15px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); color: white; font-weight: bold; transition: 0.2s; }
+        .catalog-item:hover { background: rgba(255,255,255,0.1); }
+
+        /* Модалки */
+        .modal-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 100; pointer-events: auto; }
+        .modal { background: #2b2b44; padding: 20px; border-radius: 20px; width: 90%; max-width: 400px; text-align: center; }
+        .modal h2 { color: white; margin-top: 0; }
+        .modal-btn { padding: 12px 30px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; background: #ff8c00; color: white; width: 100%; transition: 0.2s; margin-top: 10px;}
+        .modal-btn.cancel { background: #444; }
+        .modal input { width: 90%; padding: 12px; border-radius: 10px; border: 1px solid #444; background: #1a1a2e; color: white; font-size: 18px; margin-bottom: 20px; text-align: center; outline: none; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-layer">
+        <div class="speech-bubble" id="speechBubble"></div>
+
+        <div class="top-bar">
+            <div class="profile-container active">
+                <div class="profile-label">Ты</div>
+                <div class="avatar-circle" id="myAvatar">Т</div>
+                <div class="profile-name" id="myName">@user</div>
+            </div>
+            <div class="currency-panel">⭐ <span id="currencyCount">0</span></div>
+        </div>
+
+        <div class="center-info">
+            <div class="fire-name" onclick="openNameModal()" id="fireNameTag">Искорка ✏️</div>
+            <div class="fire-days" id="fireDaysTag">🔥 вместе 12 дней</div>
+        </div>
+        
+        <div class="arrow-hint">
+            <span>Нажми и тапай</span>
+            <svg viewBox="0 0 24 24"><path d="M7.41,8.59L12,13.17L16.59,8.59L18,10L12,16L6,10L7.41,8.59Z"/></svg>
+        </div>
+
+        <div class="bottom-panel">
+            <div class="friends-row" id="friendsRow"></div>
+            <div class="action-buttons">
+                <button class="action-btn" onclick="toggleCatalog()">🛍 Каталог</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="catalog-panel" id="catalogPanel">
+        <div class="catalog-header">
+            <h2>Стили</h2>
+            <button class="close-btn" onclick="toggleCatalog()">×</button>
+        </div>
+        <div id="catalogItems"></div>
+    </div>
+
+    <div class="modal-overlay" id="nameModal">
+        <div class="modal">
+            <h2>Имя огонька</h2>
+            <input type="text" id="nameInput" maxlength="15" placeholder="Введите имя...">
+            <button class="modal-btn" onclick="saveName()">Сохранить</button>
+            <button class="modal-btn cancel" onclick="closeNameModal()">Отмена</button>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- Telegram API ---
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+        const tgUser = tg.initDataUnsafe?.user || { id: 0, first_name: "User", username: "user" };
+
+        // --- Данные (Заглушки, в реальности из БД) ---
+        let userData = {
+            currency: 0,
+            totalTaps: 0, 
+            friends: [
+                { id: 1, name: "@masha", avatar: "М", fireName: "Искорка", days: 12, model: "standart.glb", isGray: false },
+                { id: 2, name: "@alex", avatar: "А", fireName: "Уголек", days: 4, model: "standart.glb", isGray: true }
+            ]
+        };
+        let currentFriendIndex = 0;
+
+        // --- 2. Сцена ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e); 
+        scene.fog = new THREE.FogExp2(0x1a1a2e, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 3, 9); 
+        camera.lookAt(0, 1.5, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enablePan = false;
+        controls.maxPolarAngle = Math.PI / 2.2; 
+        controls.minDistance = 6;
+        controls.maxDistance = 15;
+        controls.target.set(0, 1.5, 0);
+
+        // --- 3. Свет и Подиум ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+        scene.add(ambientLight);
+        const keyLight = new THREE.DirectionalLight(0xffffff, 2);
+        keyLight.position.set(5, 10, 5);
+        keyLight.castShadow = true;
+        scene.add(keyLight);
+        const rimLight = new THREE.DirectionalLight(0x3390ec, 2.5);
+        rimLight.position.set(-5, 5, -5);
+        scene.add(rimLight);
+
+        const podiumGeo = new THREE.CylinderGeometry(3, 3.2, 0.5, 64);
+        const podiumMat = new THREE.MeshStandardMaterial({ color: 0x1e1e30, roughness: 0.2, metalness: 0.5 });
+        const podium = new THREE.Mesh(podiumGeo, podiumMat);
+        podium.position.y = -0.25;
+        podium.receiveShadow = true;
+        scene.add(podium);
+
+        const ringGeo = new THREE.TorusGeometry(2.8, 0.05, 16, 100);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xff8c00 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.02;
+        scene.add(ring);
+
+        // --- 4. Окружение (Звезды) ---
+        const starsGeometry = new THREE.BufferGeometry();
+        const posArray = new Float32Array(1000 * 3);
+        for(let i = 0; i < 1000 * 3; i++) posArray[i] = (Math.random() - 0.5) * 100;
+        starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const starsMaterial = new THREE.PointsMaterial({ size: 0.1, color: 0xffffff, transparent: true, opacity: 0.6 });
+        const stars = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(stars);
+
+        // --- 5. Загрузка Огонька ---
+        const loader = new GLTFLoader();
+        let currentFire = null;
+
+        function updateUI() {
+            document.getElementById('myName').textContent = "@" + (tgUser.username || tgUser.first_name);
+            const friend = userData.friends[currentFriendIndex];
+            
+            document.getElementById('fireNameTag').textContent = friend.fireName + ' ✏️';
+            document.getElementById('fireDaysTag').textContent = `🔥 вместе ${friend.days} дней`;
+            document.getElementById('currencyCount').textContent = userData.currency;
+            
+            const modelToLoad = friend.isGray ? "hold.glb" : friend.model;
+            loadFireModel(modelToLoad);
+            renderFriendsRow();
+        }
+
+        function loadFireModel(fileName) {
+            if (currentFire) scene.remove(currentFire);
+            // Путь к моделям: ./models/имя_файла.glb
+            loader.load(`./models/${fileName}`, (gltf) => {
+                currentFire = gltf.scene;
+                const box = new THREE.Box3().setFromObject(currentFire);
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                if (maxDim > 0) {
+                    const scale = 2.5 / maxDim; 
+                    currentFire.scale.set(scale, scale, scale);
+                    currentFire.position.y = -box.min.y * scale; 
+                }
+                currentFire.traverse((child) => {
+                    if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+                });
+                scene.add(currentFire);
+            }, undefined, (e) => console.error("Ошибка загрузки модели:", e));
+        }
+
+        // --- 6. Интерфейс ---
+        function renderFriendsRow() {
+            const row = document.getElementById('friendsRow');
+            row.innerHTML = '';
+            userData.friends.forEach((friend, index) => {
+                const div = document.createElement('div');
+                div.className = `friend-item ${index === currentFriendIndex ? 'active' : ''}`;
+                div.onclick = () => { currentFriendIndex = index; updateUI(); };
+                div.innerHTML = `<div class="avatar-circle">${friend.avatar}</div><div class="profile-name">${friend.name}</div>`;
+                row.appendChild(div);
+            });
+        }
+
+        // --- 7. Сердечки ---
+        const hearts = [];
+        function spawnHearts() {
+            for(let i=0; i<3; i++) {
+                setTimeout(() => {
+                    const heart = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
+                    heart.position.set((Math.random() - 0.5) * 1.5, 3 + Math.random(), (Math.random() - 0.5) * 1.5);
+                    heart.userData = { vy: 0.05 + Math.random() * 0.05, life: 1.0 };
+                    scene.add(heart);
+                    hearts.push(heart);
+                }, i * 100);
+            }
+        }
+
+        function updateParticles() {
+            for (let i = hearts.length - 1; i >= 0; i--) {
+                const h = hearts[i];
+                h.position.y += h.userData.vy;
+                h.userData.life -= 0.02;
+                h.scale.set(h.userData.life, h.userData.life, h.userData.life);
+                if (h.userData.life <= 0) { scene.remove(h); hearts.splice(i, 1); }
+            }
+        }
+
+        // --- 8. Взаимодействие ---
+        const bubble = document.getElementById('speechBubble');
+        function showMessage(text) {
+            bubble.textContent = text;
+            bubble.classList.add('show');
+            setTimeout(() => { bubble.classList.remove('show'); }, 2000);
+        }
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        renderer.domElement.addEventListener('pointerdown', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            if (currentFire) {
+                const intersects = raycaster.intersectObject(currentFire, true);
+                if (intersects.length > 0) {
+                    // Тап!
+                    spawnHearts();
+                    userData.totalTaps++;
+                    
+                    const phrases = ["Я тебя обожаю! ❤️", "Ты лучший! 🥰", "Спасибо! ✨", "Обнимаю! 🤗"];
+                    if (userData.totalTaps % 3 === 0) {
+                        showMessage(phrases[Math.floor(Math.random() * phrases.length)]);
+                    }
+                    
+                    // Синхронизация с ботом (каждые 10 тапов)
+                    if (userData.totalTaps % 10 === 0) {
+                        if (window.Telegram.WebApp) {
+                            window.Telegram.WebApp.sendData(JSON.stringify({ action: "tap", amount: 10 }));
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- 9. Модалки и Каталог ---
+        window.toggleCatalog = () => document.getElementById('catalogPanel').classList.toggle('open');
+        window.openNameModal = () => { document.getElementById('nameInput').value = userData.friends[currentFriendIndex].fireName; document.getElementById('nameModal').style.display = 'flex'; };
+        window.closeNameModal = () => document.getElementById('nameModal').style.display = 'none';
+        window.saveName = () => {
+            const newName = document.getElementById('nameInput').value.trim();
+            if (newName) { userData.friends[currentFriendIndex].fireName = newName; updateUI(); }
+            closeNameModal();
+        };
+
+        // Каталог
+        const models = [{ name: "Обычный", file: "standart.glb" }, { name: "Зимний", file: "snow.glb" }];
+        const list = document.getElementById('catalogItems');
+        models.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'catalog-item';
+            div.innerHTML = `<span>${item.name}</span>`;
+            div.onclick = () => { userData.friends[currentFriendIndex].model = item.file; userData.friends[currentFriendIndex].isGray = false; updateUI(); toggleCatalog(); };
+            list.appendChild(div);
+        });
+
+        updateUI();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            ring.rotation.z += 0.01;
+            stars.rotation.y += 0.0005;
+            updateParticles();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
