@@ -27,11 +27,7 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
 
 USER_STATES = {}
-
-# Создаем FastAPI приложение
 api_app = FastAPI()
-
-# Создаем бота
 application = Application.builder().token(TOKEN).build()
 
 # ==================== БАЗА ДАННЫХ ====================
@@ -193,6 +189,22 @@ def press_button(chat_id, user_id):
     conn.close()
     return "waiting", total_pressed
 
+def restore_streak(chat_id, paid=False):
+    conn = get_conn()
+    c = conn.cursor(cursor_factory=DictCursor)
+    c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
+    row = c.fetchone()
+    if not row: 
+        conn.close()
+        return False
+    if row["restore_count"] >= 3 and not paid:
+        conn.close()
+        return False
+    c.execute("UPDATE streaks SET is_gray = 0, gray_since = NULL, restore_count = restore_count + 1, active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0 WHERE chat_id = %s", (chat_id,))
+    conn.commit()
+    conn.close()
+    return True
+
 def get_unsent_reminders():
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
@@ -234,11 +246,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "<b>Инструкция по запуску огонька:</b>\n\n"
-        "1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → добавь @fier_zyzabot. Включи ВСЕ права (Читать, Отвечать).\n\n"
+        "1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → добавь @fier_zyzabot. Включи ВСЕ права.\n\n"
         "2️⃣ <b>Вызови меня в чате:</b> В чате с другом нажми на 3 полоски вверху → Управление → выбери меня.\n\n"
         "3️⃣ <b>Вернись сюда и напиши /send.</b>\n\n"
-        "4️⃣ <b>Когда друг примет приглашение</b>, начнется серия. В 00:00 по ЕКБ жди кнопку «Поддержать».\n\n"
-        "⚠️ Если друг недавно не писал, Telegram может выдать ошибку. Попроси его написать тебе."
+        "4️⃣ <b>Когда друг примет приглашение</b>, начнется серия."
     )
     
     keyboard = InlineKeyboardMarkup([
@@ -339,30 +350,51 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
+# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
-    if not msg: return
+    if not msg: 
+        return
     
+    # Получаем владельца бизнес-подключения
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT user_id FROM user_connections WHERE connection_id = %s", (msg.business_connection_id,))
     row = c.fetchone()
     conn.close()
-    if not row: return
     
-    if msg.from_user.id == row["user_id"]: return
+    if not row: 
+        return
+    
+    owner_id = row["user_id"]
+    
+    # Считаем ТОЛЬКО сообщения владельца (того, кто подключил бота)
+    if msg.from_user.id != owner_id: 
+        return
+        
     streak = get_streak(msg.chat.id)
-    if not streak: return
+    if not streak: 
+        return
 
+    # Увеличиваем счетчик
     count = increment_message_count(msg.chat.id)
+    logger.info(f"📊 Сообщений от владельца в чате {msg.chat.id}: {count}")
+    
+    # Каждое 20-е сообщение - милая фраза
     if count % 20 == 0:
         phrases = ["Вы так мило общаетесь! 💬", "Я всё вижу! 👀❤️", "Продолжайте! ✨"]
         phrase = random.choice(phrases)
         if streak["user_a"] == ADMIN_ID or streak["user_b"] == ADMIN_ID:
             phrase = "Вы так мило общаетесь! Я аж завидую! 💬🔥"
         try:
-            await context.bot.send_message(chat_id=msg.chat.id, text=phrase, business_connection_id=msg.business_connection_id)
-        except: pass
+            await context.bot.send_message(
+                chat_id=msg.chat.id, 
+                text=phrase, 
+                business_connection_id=msg.business_connection_id
+            )
+            logger.info(f"✅ Отправлено милое сообщение в чат {msg.chat.id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -443,7 +475,7 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
 
-# ==================== РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ====================
+# ==================== РЕГИСТРАЦИЯ ====================
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
@@ -487,7 +519,7 @@ async def on_startup():
     await application.initialize()
     await application.bot.set_webhook(f"{URL}/{TOKEN}")
     await application.start()
-    logger.info("✅ Бот запущен и вебхук установлен")
+    logger.info("✅ Бот запущен")
 
 @api_app.on_event("shutdown")
 async def on_shutdown():
