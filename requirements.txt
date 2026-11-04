@@ -1,2 +1,4 @@
 python-telegram-bot[job-queue,webhooks]==22.8
 psycopg2-binary
+fastapi
+uvicorn
