@@ -288,7 +288,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for s in streaks:
         name_a = await get_username(context, s["user_a"])
         name_b = await get_username(context, s["user_b"])
-        text += f"{name_a} ↔️ {name_b} (Серия: {s['streak']}, Тапы: {s['total_taps_a']}/{s['total_taps_b']})\n"
+        text += f"{name_a} ↔️ {name_b} (Серия: {s['streak']})\n"
     await update.message.reply_text(text[:4000], parse_mode="HTML")
 
 async def adm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -350,13 +350,11 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
-# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК БИЗНЕС-СООБЩЕНИЙ
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
     if not msg: 
         return
     
-    # Получаем владельца бизнес-подключения
     conn = get_conn()
     c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT user_id FROM user_connections WHERE connection_id = %s", (msg.business_connection_id,))
@@ -365,10 +363,9 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     
     if not row: 
         return
-    
     owner_id = row["user_id"]
     
-    # Считаем ТОЛЬКО сообщения владельца (того, кто подключил бота)
+    # Считаем ТОЛЬКО сообщения владельца
     if msg.from_user.id != owner_id: 
         return
         
@@ -376,16 +373,12 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     if not streak: 
         return
 
-    # Увеличиваем счетчик
     count = increment_message_count(msg.chat.id)
     logger.info(f"📊 Сообщений от владельца в чате {msg.chat.id}: {count}")
     
-    # Каждое 20-е сообщение - милая фраза
     if count % 20 == 0:
         phrases = ["Вы так мило общаетесь! 💬", "Я всё вижу! 👀❤️", "Продолжайте! ✨"]
         phrase = random.choice(phrases)
-        if streak["user_a"] == ADMIN_ID or streak["user_b"] == ADMIN_ID:
-            phrase = "Вы так мило общаетесь! Я аж завидую! 💬🔥"
         try:
             await context.bot.send_message(
                 chat_id=msg.chat.id, 
@@ -448,7 +441,7 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
             msg = await context.bot.send_message(
-                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
+                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку:",
                 reply_markup=keyboard, business_connection_id=s["connection_id_a"]
             )
             set_gray(s["chat_id"], msg.message_id)
