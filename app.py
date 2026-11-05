@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
 import uvicorn
-import base64 # Добавлено для Base64-эндпоинта
+import base64  # Для Base64 API
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +19,8 @@ from telegram.ext import (
     ContextTypes, filters, BusinessConnectionHandler, PreCheckoutQueryHandler
 )
 
+# ==================== НАСТРОЙКИ ====================
+
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -29,11 +31,14 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
 BOT_NAME = "🔥 Огонек"
 
+# Путь к папке с webapp
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+
 USER_STATES = {}
 api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# CORS
+# CORS (Разрешаем запросы откуда угодно, чтобы Telegram WebView не блокировал)
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -212,7 +217,7 @@ def kill_streak(chat_id):
     c.execute("DELETE FROM streaks WHERE chat_id = %s", (chat_id,))
     conn.commit(); conn.close()
 
-# ==================== API ====================
+# ==================== API ДЛЯ MINI APP ====================
 
 @api_app.get("/api/get_user_data")
 async def get_user_data(user_id: int):
@@ -225,7 +230,14 @@ async def get_user_data(user_id: int):
             chat = await application.bot.get_chat(partner_id)
             partner_name = f"@{chat.username}" if chat.username else chat.first_name
         except: pass
-        result.append({"chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, "streak": s["streak"], "is_gray": s["is_gray"], "model": "standart"})
+        result.append({
+            "chat_id": s["chat_id"], 
+            "partner_id": partner_id, 
+            "name": partner_name, 
+            "streak": s["streak"], 
+            "is_gray": s["is_gray"], 
+            "model": "standart"
+        })
     return JSONResponse(content={"streaks": result})
 
 @api_app.post("/api/sync_taps")
@@ -235,39 +247,38 @@ async def sync_taps(request: Request):
     taps = data.get("taps", 0)
     if not user_id or not taps: return {"status": "error"}
     conn = get_conn(); c = conn.cursor()
-    c.execute("UPDATE streaks SET total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END, total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END WHERE user_a = %s OR user_b = %s", (user_id, taps, user_id, taps, user_id, user_id))
+    c.execute("""
+        UPDATE streaks SET 
+        total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END, 
+        total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END 
+        WHERE user_a = %s OR user_b = %s
+    """, (user_id, taps, user_id, taps, user_id, user_id))
     conn.commit(); conn.close()
     return {"status": "ok"}
 
-# === НОВЫЕ ЭНДПОИНТЫ ДЛЯ МОДЕЛЕЙ (ОБХОД CORS) ===
-
-WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
-
-@api_app.get("/api/model/{model_name}")
-async def get_model_file(model_name: str):
-    if ".." in model_name or "/" in model_name:
-        return JSONResponse(content={"error": "invalid name"}, status_code=400)
-    file_path = os.path.join(WEBAPP_DIR, model_name)
-    if not os.path.exists(file_path):
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    
-    response = FileResponse(file_path, media_type="model/gltf-binary")
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Cache-Control"] = "public, max-age=86400"
-    return response
+# --- Эндпоинт для загрузки 3D-моделей (Base64) ---
 
 @api_app.get("/api/model_base64/{model_name}")
 async def get_model_base64(model_name: str):
-    if ".." in model_name or "/" in model_name:
-        return JSONResponse(content={"error": "invalid"}, status_code=400)
+    # Защита от скачивания левых файлов
+    if ".." in model_name or "/" in model_name or "\\" in model_name:
+        return JSONResponse(content={"error": "invalid name"}, status_code=400)
+    
     file_path = os.path.join(WEBAPP_DIR, model_name)
+    
     if not os.path.exists(file_path):
+        logger.warning(f"Модель не найдена: {file_path}")
         return JSONResponse(content={"error": "not found"}, status_code=404)
-    with open(file_path, "rb") as f:
-        data = base64.b64encode(f.read()).decode("utf-8")
-    return JSONResponse(content={"base64": data})
+    
+    try:
+        with open(file_path, "rb") as f:
+            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        return JSONResponse(content={"base64": encoded_data})
+    except Exception as e:
+        logger.error(f"Ошибка чтения модели {model_name}: {e}")
+        return JSONResponse(content={"error": "server error"}, status_code=500)
 
-# ==================== ХЕНДЛЕРЫ ====================
+# ==================== ХЕНДЛЕРЫ БОТА ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -451,7 +462,7 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE): logger.error(f"Ошибка: {context.error}")
 
-# ==================== РЕГИСТРАЦИЯ ====================
+# ==================== РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ====================
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
@@ -472,8 +483,9 @@ application.add_handler(PreCheckoutQueryHandler(pre_checkout))
 application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 application.add_error_handler(error_handler)
 
-# ==================== ЗАПУСК ====================
+# ==================== ЗАПУСК И СТАТИКА ====================
 
+# Вебхук для Telegram
 @api_app.post(f"/{TOKEN}")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -481,15 +493,17 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return Response(status_code=200)
 
-# === МОНТИРОВАНИЕ WEBAPP ===
+# Монтируем папку webapp
 if not os.path.exists(WEBAPP_DIR):
     logger.warning(f"⚠️ Папка {WEBAPP_DIR} не найдена! Модели не будут загружаться.")
 
 api_app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
+# Редирект с корня на index.html
 @api_app.get("/")
 async def root(): return FileResponse(os.path.join(WEBAPP_DIR, "index.html"))
 
+# События запуска и остановки FastAPI
 @api_app.on_event("startup")
 async def on_startup():
     init_db()
