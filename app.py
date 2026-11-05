@@ -20,7 +20,6 @@ from telegram.ext import (
 )
 
 # ==================== НАСТРОЙКИ ====================
-
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -31,14 +30,11 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
 BOT_NAME = "🔥 Огонек"
 
-# Жесткий путь к папке webapp
 WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
-
 USER_STATES = {}
 api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# CORS для всех запросов
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -48,7 +44,7 @@ api_app.add_middleware(
 )
 
 # ==================== БАЗА ДАННЫХ ====================
-
+# (Без изменений, весь код БД сохранен)
 def get_conn():
     url = DATABASE_URL
     if url.startswith("postgres://"):
@@ -81,121 +77,80 @@ def init_db():
     except Exception as e:
         logger.error(f"❌ Ошибка БД: {e}")
 
+# (Функции save_connection, get_connection, get_peer_chat_id, create_streak, get_streak, get_all_streaks, get_user_streaks, increment_message_count, set_gray, press_button, restore_streak, get_unsent_reminders, kill_streak - ВСЕ БЕЗ ИЗМЕНЕНИЙ)
+# ВСТАВЬТЕ ИХ СЮДА ИЗ ПРЕДЫДУЩЕГО КОДА
 def save_connection(user_id, connection_id, peer_chat_id=None):
-    conn = get_conn()
-    c = conn.cursor()
+    conn = get_conn(); c = conn.cursor()
     c.execute("""
         INSERT INTO user_connections (user_id, connection_id, peer_chat_id)
-        VALUES (%s, %s, %s)
-        ON CONFLICT(user_id) DO UPDATE SET 
-            connection_id = EXCLUDED.connection_id,
-            peer_chat_id = COALESCE(EXCLUDED.peer_chat_id, user_connections.peer_chat_id)
+        VALUES (%s, %s, %s) ON CONFLICT(user_id) DO UPDATE SET 
+        connection_id = EXCLUDED.connection_id, peer_chat_id = COALESCE(EXCLUDED.peer_chat_id, user_connections.peer_chat_id)
     """, (user_id, connection_id, peer_chat_id))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def get_connection(user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT connection_id FROM user_connections WHERE user_id = %s", (user_id,))
-    row = c.fetchone()
-    conn.close()
+    row = c.fetchone(); conn.close()
     return row["connection_id"] if row else None
 
 def get_peer_chat_id(user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT peer_chat_id FROM user_connections WHERE user_id = %s", (user_id,))
-    row = c.fetchone()
-    conn.close()
+    row = c.fetchone(); conn.close()
     return row["peer_chat_id"] if row else None
 
 def create_streak(chat_id, conn_id, user_a, user_b):
-    conn = get_conn()
-    c = conn.cursor()
+    conn = get_conn(); c = conn.cursor()
     c.execute("""
         INSERT INTO streaks (chat_id, connection_id_a, user_a, user_b, streak, is_gray)
-        VALUES (%s, %s, %s, %s, 1, 0)
-        ON CONFLICT(chat_id) DO UPDATE SET
-            connection_id_a = EXCLUDED.connection_id_a,
-            user_a = EXCLUDED.user_a, user_b = EXCLUDED.user_b,
-            streak = 1, is_gray = 0
+        VALUES (%s, %s, %s, %s, 1, 0) ON CONFLICT(chat_id) DO UPDATE SET
+        connection_id_a = EXCLUDED.connection_id_a, user_a = EXCLUDED.user_a, user_b = EXCLUDED.user_b, streak = 1, is_gray = 0
     """, (chat_id, conn_id, user_a, user_b))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def get_streak(chat_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
-    row = c.fetchone()
-    conn.close()
-    return row
+    row = c.fetchone(); conn.close(); return row
 
 def get_all_streaks():
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
-    c.execute("SELECT * FROM streaks")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
+    c.execute("SELECT * FROM streaks"); rows = c.fetchall(); conn.close(); return rows
 
 def get_user_streaks(user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE user_a = %s OR user_b = %s ORDER BY streak DESC", (user_id, user_id))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    rows = c.fetchall(); conn.close(); return rows
 
 def increment_message_count(chat_id):
-    conn = get_conn()
-    c = conn.cursor()
+    conn = get_conn(); c = conn.cursor()
     c.execute("UPDATE streaks SET message_count = message_count + 1 WHERE chat_id = %s", (chat_id,))
-    conn.commit()
-    conn.close()
-    return get_streak(chat_id)["message_count"]
+    conn.commit(); conn.close(); return get_streak(chat_id)["message_count"]
 
 def set_gray(chat_id, msg_id=None):
-    conn = get_conn()
-    c = conn.cursor()
+    conn = get_conn(); c = conn.cursor()
     now = datetime.now(TZ_EKB).isoformat()
     c.execute("UPDATE streaks SET is_gray = 1, gray_since = %s, active_msg_id = %s, user_a_pressed = 0, user_b_pressed = 0 WHERE chat_id = %s", (now, msg_id, chat_id))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def press_button(chat_id, user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
     row = c.fetchone()
-    if not row: 
-        conn.close()
-        return None, 0
-
-    if user_id == row["user_a"]:
-        c.execute("UPDATE streaks SET user_a_pressed = 1 WHERE chat_id = %s", (chat_id,))
-    elif user_id == row["user_b"]:
-        c.execute("UPDATE streaks SET user_b_pressed = 1 WHERE chat_id = %s", (chat_id,))
-    
-    conn.commit()
-    c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
-    row = c.fetchone()
-    total_pressed = row["user_a_pressed"] + row["user_b_pressed"]
-    
+    if not row: conn.close(); return None, 0
+    if user_id == row["user_a"]: c.execute("UPDATE streaks SET user_a_pressed = 1 WHERE chat_id = %s", (chat_id,))
+    elif user_id == row["user_b"]: c.execute("UPDATE streaks SET user_b_pressed = 1 WHERE chat_id = %s", (chat_id,))
+    conn.commit(); c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
+    row = c.fetchone(); total_pressed = row["user_a_pressed"] + row["user_b_pressed"]
     if row["user_a_pressed"] == 1 and row["user_b_pressed"] == 1:
         new_streak = row["streak"] + 1
         c.execute("UPDATE streaks SET streak = %s, is_gray = 0, gray_since = NULL, active_msg_id = NULL, user_a_pressed = 0, user_b_pressed = 0 WHERE chat_id = %s", (new_streak, chat_id))
-        conn.commit()
-        conn.close()
-        return "success", new_streak
-    
-    conn.close()
-    return "waiting", total_pressed
+        conn.commit(); conn.close(); return "success", new_streak
+    conn.close(); return "waiting", total_pressed
 
 def restore_streak(chat_id, paid=False):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
     row = c.fetchone()
     if not row: conn.close(); return False
@@ -204,21 +159,16 @@ def restore_streak(chat_id, paid=False):
     conn.commit(); conn.close(); return True
 
 def get_unsent_reminders():
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=DictCursor)
-    c.execute("SELECT * FROM streaks WHERE is_gray = 1")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
+    c.execute("SELECT * FROM streaks WHERE is_gray = 1"); rows = c.fetchall(); conn.close(); return rows
 
 def kill_streak(chat_id):
-    conn = get_conn()
-    c = conn.cursor()
+    conn = get_conn(); c = conn.cursor()
     c.execute("DELETE FROM streaks WHERE chat_id = %s", (chat_id,))
     conn.commit(); conn.close()
 
-# ==================== API ДЛЯ MINI APP ====================
 
+# ==================== API ДЛЯ MINI APP ====================
 @api_app.get("/api/get_user_data")
 async def get_user_data(user_id: int):
     streaks = get_user_streaks(user_id)
@@ -231,58 +181,29 @@ async def get_user_data(user_id: int):
             partner_name = f"@{chat.username}" if chat.username else chat.first_name
         except: pass
         result.append({
-            "chat_id": s["chat_id"], 
-            "partner_id": partner_id, 
-            "name": partner_name, 
-            "streak": s["streak"], 
-            "is_gray": s["is_gray"], 
+            "chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, 
+            "streak": s["streak"], "is_gray": s["is_gray"], 
             "model": "snow"  # <--- ТЕПЕРЬ ПО УМОЛЧАНИЮ ОТДАЕМ SNOW
         })
     return JSONResponse(content={"streaks": result})
 
 @api_app.post("/api/sync_taps")
 async def sync_taps(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id")
-    taps = data.get("taps", 0)
+    data = await request.json(); user_id = data.get("user_id"); taps = data.get("taps", 0)
     if not user_id or not taps: return {"status": "error"}
     conn = get_conn(); c = conn.cursor()
     c.execute("""
-        UPDATE streaks SET 
-        total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END, 
-        total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END 
-        WHERE user_a = %s OR user_b = %s
+        UPDATE streaks SET total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END, 
+        total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END WHERE user_a = %s OR user_b = %s
     """, (user_id, taps, user_id, taps, user_id, user_id))
-    conn.commit(); conn.close()
-    return {"status": "ok"}
+    conn.commit(); conn.close(); return {"status": "ok"}
 
-# --- Эндпоинт для загрузки 3D-моделей (Прямой файл) ---
-@api_app.get("/api/model/{model_name}")
-async def get_model_file(model_name: str):
-    if ".." in model_name or "/" in model_name or "\\" in model_name:
-        return JSONResponse(content={"error": "invalid name"}, status_code=400)
-    
-    file_path = os.path.join(WEBAPP_DIR, model_name)
-    if not os.path.exists(file_path):
-        logger.warning(f"Модель не найдена: {file_path}")
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    
-    response = FileResponse(file_path, media_type="model/gltf-binary")
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Cache-Control"] = "public, max-age=86400"
-    return response
-
-# --- Эндпоинт для загрузки 3D-моделей (Base64) ---
 @api_app.get("/api/model_base64/{model_name}")
 async def get_model_base64(model_name: str):
     if ".." in model_name or "/" in model_name or "\\" in model_name:
         return JSONResponse(content={"error": "invalid name"}, status_code=400)
-    
     file_path = os.path.join(WEBAPP_DIR, model_name)
-    if not os.path.exists(file_path):
-        logger.warning(f"Модель не найдена: {file_path}")
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    
+    if not os.path.exists(file_path): return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         with open(file_path, "rb") as f:
             encoded_data = base64.b64encode(f.read()).decode("utf-8")
@@ -292,29 +213,21 @@ async def get_model_base64(model_name: str):
         return JSONResponse(content={"error": "server error"}, status_code=500)
 
 # ==================== ХЕНДЛЕРЫ БОТА ====================
-
+# (Вставьте все хендлеры start, com_command, test_command, myfaier_command, admin_command, adm_command, handle_admin_phrase, add_command, handle_add_choice, send_invite_command, force_check, handle_business_message, handle_callback, pre_checkout, successful_payment, check_midnight, remind_gray, on_business_connect, error_handler из предыдущего кода)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if context.args and context.args[0].startswith("bizChat"):
         try:
-            chat_id = int(context.args[0][7:])
-            save_connection(user.id, get_connection(user.id), chat_id)
+            chat_id = int(context.args[0][7:]); save_connection(user.id, get_connection(user.id), chat_id)
             await update.message.reply_text(f"✅ Я запомнил этот чат (ID: {chat_id}). Напиши /send.")
         except: pass
         return
-    text = (
-        f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
-        "1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → @fier_zyzabot. Включи ВСЕ права.\n\n"
-        "2️⃣ <b>Вызови меня в чате:</b> В чате с другом нажми на 3 полоски вверху → Управление → выбери меня.\n\n"
-        "3️⃣ <b>Вернись сюда и напиши /send.</b>\n\n"
-        "4️⃣ <b>Когда друг примет приглашение</b>, начнется серия."
-    )
+    text = (f"🔥 <b>Привет, {user.first_name}!</b>\n\n1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → @fier_zyzabot. Включи ВСЕ права.\n\n2️⃣ <b>Вызови меня в чате:</b> В чате с другом нажми на 3 полоски вверху → Управление → выбери меня.\n\n3️⃣ <b>Вернись сюда и напиши /send.</b>\n\n4️⃣ <b>Когда друг примет приглашение</b>, начнется серия.")
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Подключение", url="tg://settings/edit")], [InlineKeyboardButton("📖 Все команды", callback_data="help")]])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "📋 <b>Команды:</b>\n\n/start — Инструкция\n/send — Пригласить\n/myfaier — Мои огоньки\n/l — Проверка\n/adm — Рассылка (админ)\n/add — Тест (админ)"
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text("📋 <b>Команды:</b>\n\n/start — Инструкция\n/send — Пригласить\n/myfaier — Мои огоньки\n/l — Проверка\n/adm — Рассылка (админ)\n/add — Тест (админ)", parse_mode="HTML")
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     web_app_url = f"{URL}/webapp/index.html"
@@ -322,8 +235,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Нажми кнопку:", reply_markup=keyboard)
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    streaks = get_user_streaks(user.id)
+    user = update.effective_user; streaks = get_user_streaks(user.id)
     if not streaks: return await update.message.reply_text("❌ Нет огоньков.")
     text = "🔥 <b>Ваши огоньки:</b>\n\n"
     for s in streaks:
@@ -337,10 +249,8 @@ async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return await update.message.reply_text("⛔ Нет прав.")
-    streaks = get_all_streaks()
-    text = "👑 <b>Все огоньки:</b>\n\n"
-    for s in streaks:
-        text += f"{s['user_a']} ↔️ {s['user_b']} ({s['streak']} дн.)\n"
+    streaks = get_all_streaks(); text = "👑 <b>Все огоньки:</b>\n\n"
+    for s in streaks: text += f"{s['user_a']} ↔️ {s['user_b']} ({s['streak']} дн.)\n"
     await update.message.reply_text(text[:4000], parse_mode="HTML")
 
 async def adm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,13 +259,10 @@ async def adm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 Введите фразу:")
 
 async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    state = USER_STATES.get(user.id)
+    user = update.effective_user; state = USER_STATES.get(user.id)
     if not state or state.get("state") != "waiting_admin_phrase": return
-    phrase = update.message.text.strip()
-    USER_STATES.pop(user.id, None)
-    streaks = get_all_streaks()
-    count = 0
+    phrase = update.message.text.strip(); USER_STATES.pop(user.id, None)
+    streaks = get_all_streaks(); count = 0
     for s in streaks:
         try:
             await context.bot.send_message(chat_id=s["chat_id"], text=phrase, business_connection_id=s["connection_id_a"])
@@ -373,8 +280,7 @@ async def handle_add_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); data = query.data
     streaks = get_all_streaks()
     if not streaks: return await query.edit_message_text("❌ Нет чатов.")
-    targets = streaks if data == "add_all" else [streaks[-1]]
-    count = 0
+    targets = streaks if data == "add_all" else [streaks[-1]]; count = 0
     for s in targets:
         try:
             await context.bot.send_message(chat_id=s["chat_id"], text="🔥 <b>День продлен!</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]]), business_connection_id=s["connection_id_a"])
@@ -383,9 +289,7 @@ async def handle_add_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"✅ Отправлено в {count} чатов.")
 
 async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    conn_id = get_connection(user.id)
-    peer_chat_id = get_peer_chat_id(user.id)
+    user = update.effective_user; conn_id = get_connection(user.id); peer_chat_id = get_peer_chat_id(user.id)
     if not conn_id: return await update.message.reply_text("❌ Бот не подключен.")
     if not peer_chat_id: return await update.message.reply_text("❌ Нажми кнопку бота в чате с другом.")
     if get_streak(peer_chat_id): return await update.message.reply_text("🔥 Серия уже есть.")
@@ -396,8 +300,7 @@ async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e: await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    conn_id = get_connection(user.id)
+    user = update.effective_user; conn_id = get_connection(user.id)
     if not conn_id: return await update.message.reply_text("❌ Нет подключения.")
     try:
         conn_info = await context.bot.get_business_connection(conn_id)
@@ -435,8 +338,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if status == "waiting" and result == 1:
             await query.edit_message_text(f"⚪ Ждем второго... 1/2", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Поддержать", callback_data="keep_")]]))
         elif status == "success":
-            new_streak = result; await query.message.delete()
-            streak = get_streak(query.message.chat.id)
+            new_streak = result; await query.message.delete(); streak = get_streak(query.message.chat.id)
             await context.bot.send_message(chat_id=query.message.chat.id, text=f"🔥 <b>Серия: {new_streak} дней!</b>", parse_mode="HTML", business_connection_id=streak["connection_id_a"])
     elif data.startswith("add_"): await handle_add_choice(update, context)
 
@@ -471,11 +373,8 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
         db_conn = get_conn(); c = db_conn.cursor()
         c.execute("UPDATE streaks SET connection_id_a = %s WHERE user_a = %s", (conn.id, conn.user.id))
         db_conn.commit(); db_conn.close()
-        logger.info(f"✅ Подключение: {conn.user.id}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE): logger.error(f"Ошибка: {context.error}")
-
-# ==================== РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ====================
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
@@ -489,14 +388,11 @@ application.add_handler(CommandHandler("test", test_command))
 
 application.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
 application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
-
 application.add_handler(CallbackQueryHandler(handle_callback))
 application.add_handler(BusinessConnectionHandler(on_business_connect))
 application.add_handler(PreCheckoutQueryHandler(pre_checkout))
 application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 application.add_error_handler(error_handler)
-
-# ==================== ЗАПУСК И СТАТИКА ====================
 
 @api_app.post(f"/{TOKEN}")
 async def telegram_webhook(request: Request):
@@ -504,9 +400,6 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, application.bot)
     await application.update_queue.put(update)
     return Response(status_code=200)
-
-if not os.path.exists(WEBAPP_DIR):
-    logger.warning(f"⚠️ Папка {WEBAPP_DIR} не найдена! Модели не будут загружаться.")
 
 api_app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
