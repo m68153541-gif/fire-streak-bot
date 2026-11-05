@@ -7,38 +7,66 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&display=swap');
-        body { margin: 0; overflow: hidden; background: #1a1a2e; font-family: 'Nunito', sans-serif; touch-action: none; }
+        body { margin: 0; overflow: hidden; background: #0f0f1a; font-family: 'Nunito', sans-serif; touch-action: none; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; outline: none; }
         
         .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 15px; box-sizing: border-box; }
         
         .top-bar { display: flex; justify-content: space-between; align-items: flex-start; }
-        .currency-panel { background: rgba(0,0,0,0.5); padding: 8px 15px; border-radius: 20px; display: flex; align-items: center; gap: 5px; color: #ffd700; font-weight: 900; font-size: 18px; pointer-events: auto; backdrop-filter: blur(10px); }
+        .currency-panel { background: rgba(0,0,0,0.6); padding: 8px 15px; border-radius: 20px; display: flex; align-items: center; gap: 5px; color: #ffd700; font-weight: 900; font-size: 18px; pointer-events: auto; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
         
         .my-profile { display: flex; flex-direction: column; align-items: center; pointer-events: auto; }
-        .my-avatar { width: 50px; height: 50px; border-radius: 50%; background: #3390ec; border: 2px solid white; display: flex; justify-content: center; align-items: center; font-size: 20px; color: white; font-weight: bold; overflow: hidden; }
+        .my-avatar { width: 50px; height: 50px; border-radius: 50%; background: #3390ec; border: 2px solid white; display: flex; justify-content: center; align-items: center; font-size: 20px; color: white; font-weight: bold; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
         .my-avatar img { width: 100%; height: 100%; object-fit: cover; }
         .my-name { color: white; font-size: 12px; margin-top: 5px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
         
         .center-info { position: absolute; top: 12%; width: 100%; text-align: center; pointer-events: none; z-index: 5; }
-        .fire-name { font-size: 28px; font-weight: 900; color: white; text-shadow: 0 4px 10px rgba(0,0,0,0.8); }
-        .fire-days { font-size: 16px; font-weight: 800; color: #ffd700; text-shadow: 0 2px 5px rgba(0,0,0,0.8); margin-top: 5px;}
+        .fire-name { font-size: 28px; font-weight: 900; color: white; text-shadow: 0 4px 15px rgba(0,0,0,0.9); }
+        .fire-days { font-size: 18px; font-weight: 800; color: #ffd700; text-shadow: 0 2px 8px rgba(0,0,0,0.9); margin-top: 5px;}
         
-        .bottom-panel { display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
+        .bottom-panel { display: flex; flex-direction: column; gap: 15px; pointer-events: auto; }
         .friends-row { display: flex; gap: 10px; overflow-x: auto; padding: 5px 0; justify-content: flex-start; scrollbar-width: none; }
         .friends-row::-webkit-scrollbar { display: none; }
-        .friend-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.5; transition: 0.2s; min-width: 60px; }
+        .friend-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.5; transition: 0.2s; min-width: 65px; }
         .friend-item.active { opacity: 1; transform: scale(1.1); }
         
-        .friend-item .avatar-circle { width: 45px; height: 45px; border-radius: 50%; background: linear-gradient(135deg, #3390ec, #00c6ff); border: 2px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 18px; color: white; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
-        .friend-item.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.5); }
-        .friend-item .profile-name { font-size: 11px; color: white; margin-top: 3px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+        .friend-item .avatar-circle { width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #3390ec, #00c6ff); border: 2px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 20px; color: white; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+        .friend-item.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 15px rgba(255,215,0,0.6); }
+        .friend-item .profile-name { font-size: 12px; color: white; margin-top: 5px; text-shadow: 0 1px 4px rgba(0,0,0,0.9); max-width: 65px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
         
-        .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
+        .action-buttons { display: flex; justify-content: center; gap: 10px; }
+        .action-btn { background: linear-gradient(135deg, rgba(51,144,236,0.8), rgba(0,86,179,0.8)); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 12px 20px; border-radius: 15px; font-size: 14px; font-weight: 900; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(5px); flex: 1; display: flex; justify-content: center; align-items: center; gap: 5px;}
+        
+        .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 12px 25px; border-radius: 25px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 30px rgba(0,0,0,0.5); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
         
-        .model-error { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; }
-        .loader-text { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ffd700; font-size: 16px; font-weight: bold; display: none; z-index: 100; pointer-events: none;}
+        .model-error { position: absolute; bottom: 140px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; border: 1px solid #ff6b6b;}
+        .loader-text { position: absolute; bottom: 140px; left: 50%; transform: translateX(-50%); color: #ffd700; font-size: 16px; font-weight: bold; display: none; z-index: 100; pointer-events: none;}
+
+        /* Модальные окна */
+        .modal { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15,15,26,0.9); backdrop-filter: blur(10px); z-index: 200; display: none; flex-direction: column; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; pointer-events: auto; }
+        .modal.active { display: flex; }
+        .modal-content { background: rgba(30,30,50,0.95); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 20px; width: 100%; max-width: 350px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); text-align: center; }
+        .modal-title { color: white; font-size: 22px; font-weight: 900; margin-bottom: 20px; }
+        .catalog-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+        .catalog-item { background: rgba(255,255,255,0.05); border: 2px solid transparent; border-radius: 15px; padding: 10px; cursor: pointer; transition: 0.2s; }
+        .catalog-item:hover { background: rgba(255,255,255,0.1); }
+        .catalog-item.active { border-color: #ffd700; background: rgba(255,215,0,0.1); }
+        .catalog-item img { width: 100%; height: 60px; object-fit: contain; margin-bottom: 5px; } /* Заглушка вместо картинки */
+        .catalog-item span { color: white; font-size: 12px; font-weight: bold; display: block; }
+        .close-btn { background: #3390ec; color: white; border: none; padding: 12px; border-radius: 12px; width: 100%; font-size: 16px; font-weight: bold; cursor: pointer; }
+        
+        .stats-row { display: flex; justify-content: space-between; color: white; font-size: 16px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .stats-row:last-child { border-bottom: none; }
+        .stats-label { opacity: 0.7; }
+        .stats-value { font-weight: 900; color: #ffd700; }
+
+        /* Сердечки */
+        .heart { position: absolute; color: #ff4d4d; font-size: 24px; pointer-events: none; z-index: 60; animation: floatUp 1s ease-out forwards; }
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-100px) scale(1.5); opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -63,6 +91,40 @@
 
         <div class="bottom-panel">
             <div class="friends-row" id="friendsRow"></div>
+            <div class="action-buttons">
+                <button class="action-btn" id="btnCatalog">🛍 Каталог</button>
+                <button class="action-btn" id="btnStats">📊 Статистика</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно каталога -->
+    <div class="modal" id="catalogModal">
+        <div class="modal-content">
+            <div class="modal-title">Выбери огонек</div>
+            <div class="catalog-grid">
+                <div class="catalog-item" data-model="standart">
+                    <div style="font-size: 40px;">🔥</div><span>Стандарт</span>
+                </div>
+                <div class="catalog-item" data-model="snow">
+                    <div style="font-size: 40px;">❄️</div><span>Зимний</span>
+                </div>
+                <div class="catalog-item" data-model="happy">
+                    <div style="font-size: 40px;">😊</div><span>Веселый</span>
+                </div>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('catalogModal').classList.remove('active')">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Модальное окно статистики -->
+    <div class="modal" id="statsModal">
+        <div class="modal-content">
+            <div class="modal-title">Статистика</div>
+            <div id="statsContent" style="margin-bottom: 20px;">
+                <!-- Заполняется динамически -->
+            </div>
+            <button class="close-btn" onclick="document.getElementById('statsModal').classList.remove('active')">Закрыть</button>
         </div>
     </div>
 
@@ -83,14 +145,15 @@
 
         const tg = window.Telegram.WebApp;
         tg.ready(); tg.expand();
-        
         const tgUser = tg.initDataUnsafe?.user || { id: 0, first_name: "User", username: "user" };
 
+        // --- ОКРУЖЕНИЕ ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1a1a2e); 
+        scene.background = new THREE.Color(0x0a0a15); 
+        scene.fog = new THREE.FogExp2(0x0a0a15, 0.05); // Туман для глубины
         
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 3, 10); 
+        camera.position.set(0, 3, 9); 
         camera.lookAt(0, 1.5, 0);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -100,18 +163,67 @@
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true; controls.enablePan = false;
-        controls.maxPolarAngle = Math.PI / 2; controls.target.set(0, 1.5, 0);
+        controls.maxPolarAngle = Math.PI / 2.1; controls.minPolarAngle = Math.PI / 4;
+        controls.target.set(0, 1.5, 0);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 1.5));
-        const keyLight = new THREE.DirectionalLight(0xffffff, 2);
-        keyLight.position.set(5, 10, 5); scene.add(keyLight);
+        // --- СВЕТ ---
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        
+        const keyLight = new THREE.DirectionalLight(0xffeedd, 2);
+        keyLight.position.set(5, 10, 5); 
+        keyLight.castShadow = true;
+        scene.add(keyLight);
 
+        // Синий свет сзади для красоты
+        const rimLight = new THREE.DirectionalLight(0x4466ff, 3);
+        rimLight.position.set(-5, 5, -5);
+        scene.add(rimLight);
+
+        // Светящаяся сфера (типа луна)
+        const moonGeo = new THREE.SphereGeometry(2, 32, 32);
+        const moonMat = new THREE.MeshBasicMaterial({ color: 0x88aaff, transparent: true, opacity: 0.2 });
+        const moon = new THREE.Mesh(moonGeo, moonMat);
+        moon.position.set(-15, 15, -20);
+        scene.add(moon);
+
+        // --- ПОДСТАВКА И ДЕРЕВЬЯ ---
+        // Подиум
+        const podiumGeo = new THREE.CylinderGeometry(3, 3.2, 0.5, 64);
+        const podiumMat = new THREE.MeshStandardMaterial({ color: 0x222233, roughness: 0.2, metalness: 0.8 });
+        const podium = new THREE.Mesh(podiumGeo, podiumMat);
+        podium.position.y = -0.25;
+        podium.receiveShadow = true;
+        scene.add(podium);
+
+        // Светящееся кольцо на подиуме
+        const ringGeo = new THREE.TorusGeometry(2.9, 0.05, 16, 100);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0x3390ec });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 0.01;
+        scene.add(ring);
+
+        // Простые деревья вокруг (для атмосферы)
+        const treeGeo = new THREE.ConeGeometry(1, 4, 6);
+        const treeMat = new THREE.MeshStandardMaterial({ color: 0x111122 });
+        for (let i = 0; i < 20; i++) {
+            const tree = new THREE.Mesh(treeGeo, treeMat);
+            const angle = (i / 20) * Math.PI * 2;
+            const radius = 8 + Math.random() * 5;
+            tree.position.set(Math.cos(angle) * radius, 1.5, Math.sin(angle) * radius);
+            tree.rotation.y = Math.random() * Math.PI;
+            scene.add(tree);
+        }
+
+        // --- ЛОГИКА ---
         const loader = new GLTFLoader();
         const dracoLoader = new DRACOLoader();
         dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
         loader.setDRACOLoader(dracoLoader);
 
         let currentFire = null;
+        let originalFireY = 0;
+        let isJumping = false;
         let friendsData = [];
         let currentFriendIndex = 0;
         const modelErrorEl = document.getElementById('modelError');
@@ -148,16 +260,20 @@
             document.getElementById('fireDaysTag').textContent = `🔥 вместе ${f.streak} дней`;
 
             let modelFile = "standart.glb";
-            if (f.is_gray) modelFile = "hold.glb";
-            else if (f.model === "snow") modelFile = "snow.glb";
-            else if (f.model === "happy") modelFile = "happy.glb";
+            if (f.is_gray) {
+                modelFile = "hold.glb";
+            } else if (f.model === "snow") {
+                modelFile = "snow.glb";
+            } else if (f.model === "happy") {
+                modelFile = "happy.glb";
+            }
 
             loadModel(modelFile);
             renderFriendsList();
+            updateCatalogSelection(f.model);
         }
 
-        // ГРУЗИМ ТОЛЬКО ЧЕРЕЗ BASE64 API (Самый надежный способ для Telegram)
-        async function loadModel(fileName, attempt = 1) {
+        async function loadModel(fileName) {
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
@@ -166,7 +282,6 @@
             loaderTextEl.style.display = 'block';
 
             const url = `/api/model_base64/${fileName}`;
-            console.log(`[Попытка ${attempt}] Загрузка Base64:`, url);
             
             try {
                 const response = await fetch(url);
@@ -182,22 +297,14 @@
                 }
                 
                 loader.parse(bytes.buffer, '', (gltf) => {
-                    console.log(`✅ Модель ${fileName} загружена!`);
                     setupModel(gltf.scene);
                     loaderTextEl.style.display = 'none';
                 }, (err) => {
-                    console.error(`❌ Ошибка парсинга ${fileName}:`, err);
                     showError(`⚠️ Ошибка 3D-модели`);
                 });
 
             } catch (err) {
-                console.error(`❌ Ошибка сети (попытка ${attempt}):`, err);
-                
-                if (attempt < 3) {
-                    setTimeout(() => loadModel(fileName, attempt + 1), 2000);
-                } else {
-                    showError(`⚠️ Сбой сети. Попробуйте позже.`);
-                }
+                showError(`⚠️ Сбой сети. Попробуйте позже.`);
             }
         }
 
@@ -218,6 +325,8 @@
             currentFire.position.set(0, 0, 0); 
             currentFire.position.y = -box.min.y * scale; 
             
+            originalFireY = currentFire.position.y; // Запоминаем базовую высоту
+            
             scene.add(currentFire);
         }
 
@@ -237,15 +346,29 @@
             });
         }
 
+        // --- КЛИКИ, ПРЫЖКИ И СЕРДЕЧКИ ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
         const bubble = document.getElementById('speechBubble');
+        const phrases = ["Я тебя обожаю! ❤️", "Ты лучший! 🌟", "Еще один день вместе! 🔥", "Спасибо за тепло! ☀️"];
+
         function showMessage(text) {
             bubble.textContent = text;
             bubble.classList.add('show');
             setTimeout(() => { bubble.classList.remove('show'); }, 2000);
         }
 
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
+        function spawnHeart() {
+            const heart = document.createElement('div');
+            heart.className = 'heart';
+            heart.innerHTML = '❤️';
+            // Позиция рандомно около центра экрана
+            heart.style.left = (window.innerWidth / 2 + (Math.random() - 0.5) * 100) + 'px';
+            heart.style.top = (window.innerHeight / 2 + (Math.random() - 0.5) * 50) + 'px';
+            document.body.appendChild(heart);
+            
+            setTimeout(() => heart.remove(), 1000);
+        }
 
         renderer.domElement.addEventListener('pointerdown', (event) => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -255,16 +378,130 @@
             if (currentFire) {
                 const intersects = raycaster.intersectObject(currentFire, true);
                 if (intersects.length > 0) {
-                    showMessage("Я тебя обожаю! ❤️");
+                    // 1. Показываем фразу
+                    showMessage(phrases[Math.floor(Math.random() * phrases.length)]);
+                    // 2. Сердечки
+                    for(let i=0; i<3; i++) setTimeout(spawnHeart, i*100);
+                    
+                    // 3. Прыжок
+                    if (!isJumping) {
+                        isJumping = true;
+                        const startTime = Date.now();
+                        const jumpDuration = 500;
+                        
+                        const jumpInterval = setInterval(() => {
+                            const elapsed = Date.now() - startTime;
+                            if (elapsed >= jumpDuration) {
+                                currentFire.position.y = originalFireY;
+                                isJumping = false;
+                                clearInterval(jumpInterval);
+                            } else {
+                                // Формула прыжка (парабола)
+                                const progress = elapsed / jumpDuration;
+                                const jumpHeight = Math.sin(progress * Math.PI) * 0.5;
+                                currentFire.position.y = originalFireY + jumpHeight;
+                            }
+                        }, 16);
+                    }
+
+                    // 4. Отправляем тап в базу
+                    const f = friendsData[currentFriendIndex];
+                    fetch('/api/sync_taps', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: tgUser.id, chat_id: f.chat_id })
+                    });
                 }
             }
         });
 
+        // --- КАТАЛОГ ---
+        const btnCatalog = document.getElementById('btnCatalog');
+        const catalogModal = document.getElementById('catalogModal');
+        const catalogItems = document.querySelectorAll('.catalog-item');
+
+        btnCatalog.onclick = () => catalogModal.classList.add('active');
+
+        catalogItems.forEach(item => {
+            item.onclick = async () => {
+                const modelName = item.dataset.model;
+                const f = friendsData[currentFriendIndex];
+                
+                // Меняем в локальных данных
+                f.model = modelName;
+                
+                // Меняем в UI
+                updateCatalogSelection(modelName);
+                catalogModal.classList.remove('active');
+                updateUI(); // Перезагружаем модель
+                
+                // Отправляем в базу
+                await fetch('/api/set_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: f.chat_id, model: modelName })
+                });
+            };
+        });
+
+        function updateCatalogSelection(currentModel) {
+            catalogItems.forEach(item => {
+                if (item.dataset.model === currentModel) item.classList.add('active');
+                else item.classList.remove('active');
+            });
+        }
+
+        // --- СТАТИСТИКА ---
+        const btnStats = document.getElementById('btnStats');
+        const statsModal = document.getElementById('statsModal');
+        const statsContent = document.getElementById('statsContent');
+
+        btnStats.onclick = () => {
+            const f = friendsData[currentFriendIndex];
+            
+            // Определяем, кто из них кто
+            const isMeUserA = (tgUser.id === f.user_a);
+            const myTaps = isMeUserA ? f.total_taps_a : f.total_taps_b;
+            const partnerTaps = isMeUserA ? f.total_taps_b : f.total_taps_a;
+
+            statsContent.innerHTML = `
+                <div class="stats-row">
+                    <span class="stats-label">Дней вместе:</span>
+                    <span class="stats-value">${f.streak}</span>
+                </div>
+                <div class="stats-row">
+                    <span class="stats-label">Дата начала:</span>
+                    <span class="stats-value">${f.created_at}</span>
+                </div>
+                <div class="stats-row">
+                    <span class="stats-label">Твои тапы:</span>
+                    <span class="stats-value">${myTaps}</span>
+                </div>
+                <div class="stats-row">
+                    <span class="stats-label">Тапы партнера:</span>
+                    <span class="stats-value">${partnerTaps}</span>
+                </div>
+            `;
+            statsModal.classList.add('active');
+        };
+
+        // --- СТАРТ ---
         loadData();
 
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
+            
+            // Легкое парение огонька, если он не прыгает
+            if (currentFire && !isJumping) {
+                const time = Date.now() * 0.002;
+                currentFire.position.y = originalFireY + Math.sin(time) * 0.05;
+                currentFire.rotation.y += 0.005; // Медленное вращение
+            }
+
+            // Вращение кольца
+            ring.rotation.z += 0.01;
+
             renderer.render(scene, camera);
         }
         animate();
