@@ -236,7 +236,7 @@ async def get_user_data(user_id: int):
             "name": partner_name, 
             "streak": s["streak"], 
             "is_gray": s["is_gray"], 
-            "model": "standart"
+            "model": "snow"  # <--- ТЕПЕРЬ ПО УМОЛЧАНИЮ ОТДАЕМ SNOW
         })
     return JSONResponse(content={"streaks": result})
 
