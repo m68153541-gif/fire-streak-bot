@@ -29,8 +29,10 @@
         .friends-row::-webkit-scrollbar { display: none; }
         .friend-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.5; transition: 0.2s; min-width: 60px; }
         .friend-item.active { opacity: 1; transform: scale(1.1); }
-        .friend-item .avatar-circle { width: 45px; height: 45px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 18px; color: white; font-weight: bold; }
-        .friend-item.active .avatar-circle { border-color: #ffd700; }
+        
+        /* Аватарки друзей */
+        .friend-item .avatar-circle { width: 45px; height: 45px; border-radius: 50%; background: linear-gradient(135deg, #3390ec, #00c6ff); border: 2px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 18px; color: white; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+        .friend-item.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.5); }
         .friend-item .profile-name { font-size: 11px; color: white; margin-top: 3px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
         
         .action-buttons { display: flex; justify-content: center; gap: 10px; }
@@ -164,7 +166,6 @@
                 }
             } catch (e) {
                 console.error("Ошибка API:", e);
-                document.getElementById('fireNameTag').textContent = "Ошибка загрузки";
             }
         }
 
@@ -175,7 +176,6 @@
             document.getElementById('fireNameTag').textContent = f.name + ' ✏️';
             document.getElementById('fireDaysTag').textContent = `🔥 вместе ${f.streak} дней`;
 
-            // ОТНОСИТЕЛЬНЫЙ ПУТЬ К МОДЕЛИ (в одной папке с index.html)
             let modelFile = "standart.glb";
             if (f.is_gray) modelFile = "hold.glb";
             else if (f.model === "snow") modelFile = "snow.glb";
@@ -187,7 +187,7 @@
         function loadModel(fileName) {
             if (currentFire) scene.remove(currentFire);
             
-            // Важно: используем ./ чтобы брать модель из той же папки
+            // Жесткий путь
             const modelPath = `./${fileName}`;
             console.log("Загрузка модели:", modelPath);
 
@@ -226,8 +226,13 @@
                 const div = document.createElement('div');
                 div.className = `friend-item ${index === currentFriendIndex ? 'active' : ''}`;
                 div.onclick = () => { currentFriendIndex = index; updateUI(); };
+                
+                // Красивая заглушка вместо аватарки
                 const char = f.name && f.name !== "ID:" ? f.name[1].toUpperCase() : "?";
-                div.innerHTML = `<div class="avatar-circle">${char}</div><div class="profile-name">${f.name}</div>`;
+                div.innerHTML = `
+                    <div class="avatar-circle">${char}</div>
+                    <div class="profile-name">${f.name}</div>
+                `;
                 row.appendChild(div);
             });
         }
