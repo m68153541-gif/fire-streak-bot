@@ -39,7 +39,6 @@
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
 
-        /* Каталог */
         .catalog-panel { position: absolute; bottom: -100%; left: 0; width: 100%; background: #2b2b44; transition: 0.3s; z-index: 20; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; border-radius: 20px 20px 0 0; }
         .catalog-panel h2 { color: white; margin: 0 0 10px 0; }
     </style>
@@ -101,7 +100,6 @@
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a2e); 
         
-        // Камера (настроена так, чтобы огонек был по центру)
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(0, 3, 10); 
         camera.lookAt(0, 1.5, 0);
@@ -177,11 +175,11 @@
             document.getElementById('fireNameTag').textContent = f.name + ' ✏️';
             document.getElementById('fireDaysTag').textContent = `🔥 вместе ${f.streak} дней`;
 
+            // Путь к модели — /webapp/имя_файла
             let modelFile = "standart.glb";
             if (f.is_gray) modelFile = "hold.glb";
             else if (f.model === "snow") modelFile = "snow.glb";
 
-            // ВАЖНО: Путь к модели теперь /webapp/имя_файла
             loadModel(modelFile);
             renderFriendsList();
         }
@@ -189,7 +187,6 @@
         function loadModel(fileName) {
             if (currentFire) scene.remove(currentFire);
             
-            // Жесткий путь /webapp/
             loader.load(`/webapp/${fileName}`, (gltf) => {
                 currentFire = gltf.scene;
                 const box = new THREE.Box3().setFromObject(currentFire);
@@ -199,7 +196,6 @@
                 
                 currentFire.scale.set(scale, scale, scale);
                 currentFire.position.set(0, 0, 0); 
-                // Опускаем на подиум
                 currentFire.position.y = -box.min.y * scale; 
                 
                 currentFire.traverse((child) => {
@@ -222,7 +218,6 @@
             });
         }
 
-        // --- Тапы ---
         const bubble = document.getElementById('speechBubble');
         function showMessage(text) {
             bubble.textContent = text;
@@ -253,7 +248,6 @@
             }
         });
 
-        // --- Каталог ---
         window.toggleCatalog = () => {
             const panel = document.getElementById('catalogPanel');
             panel.style.bottom = panel.style.bottom === '0px' ? '-100%' : '0px';
@@ -276,7 +270,6 @@
             catalogList.appendChild(btn);
         });
 
-        // --- Запуск ---
         loadData();
 
         function animate() {
