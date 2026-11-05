@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
 import uvicorn
+import asyncio
 
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +26,7 @@ URL = os.environ.get("RENDER_EXTERNAL_URL")
 DATABASE_URL = os.environ.get("DATABASE_URL") 
 TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
+BOT_NAME = "🔥 Огонек"
 
 USER_STATES = {}
 api_app = FastAPI()
@@ -259,7 +261,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)\n/test_midnight - Тест таймера"
+    text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)\n/add - Тест продления (админ)"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -319,6 +321,49 @@ async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
             
     await update.message.reply_text(f"✅ Отправлено в {count} чатов.")
 
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ Нет прав.")
+    
+    USER_STATES[update.effective_user.id] = {"state": "waiting_add_choice"}
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Всем", callback_data="add_all")],
+        [InlineKeyboardButton("Только последнему", callback_data="add_last")]
+    ])
+    await update.message.reply_text("📢 Куда отправить тест?", reply_markup=keyboard)
+
+async def handle_add_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user = update.effective_user
+    
+    streaks = get_all_streaks()
+    if not streaks:
+        await query.edit_message_text("❌ Нет ни одного чата в базе.")
+        return
+    
+    if data == "add_all":
+        targets = streaks
+    else:
+        targets = [streaks[-1]]
+    
+    count = 0
+    for s in targets:
+        try:
+            await context.bot.send_message(
+                chat_id=s["chat_id"],
+                text="🔥 <b>День продлен!</b>\n\nНажмите кнопку ниже, чтобы поддержать огонек:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]]),
+                business_connection_id=s["connection_id_a"]
+            )
+            count += 1
+        except Exception as e:
+            logger.error(f"Ошибка отправки в {s['chat_id']}: {e}")
+    
+    await query.edit_message_text(f"✅ Отправлено в {count} чатов.")
+
 async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn_id = get_connection(user.id)
@@ -350,15 +395,6 @@ async def force_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
-# НОВАЯ КОМАНДА ДЛЯ ТЕСТА ТАЙМЕРА
-async def test_midnight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ Нет прав.")
-    
-    await update.message.reply_text("🧪 Запускаю тест таймера (check_midnight)...")
-    await check_midnight(context)
-    await update.message.reply_text("✅ Тест завершен. Проверь чаты.")
-
 async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message
     if not msg: 
@@ -370,23 +406,24 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     row = c.fetchone()
     conn.close()
     
-    if not row: 
-        return
+    if not row: return
     owner_id = row["user_id"]
     
-    if msg.from_user.id != owner_id: 
-        return
+    if msg.from_user.id != owner_id: return
         
     streak = get_streak(msg.chat.id)
-    if not streak: 
-        return
+    if not streak: return
 
     count = increment_message_count(msg.chat.id)
     logger.info(f"📊 Сообщений от владельца в чате {msg.chat.id}: {count}")
     
     if count % 20 == 0:
-        phrases = ["Вы так мило общаетесь! 💬", "Я всё вижу! 👀❤️", "Продолжайте! ✨"]
-        phrase = random.choice(phrases)
+        phrases = [
+            "Вы так мило общаетесь! 💬",
+            "Я всё вижу! 👀❤️",
+            "Продолжайте! ✨"
+        ]
+        phrase = random.choice(phrases) + f" ({BOT_NAME})"
         try:
             await context.bot.send_message(
                 chat_id=msg.chat.id, 
@@ -404,7 +441,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     if data == "help":
-        await query.message.edit_text("📋 Команды: /start, /send, /myfaier, /l, /adm, /test_midnight", parse_mode="HTML")
+        await query.message.edit_text("📋 Команды: /start, /send, /myfaier, /l, /adm, /add", parse_mode="HTML")
         return
         
     if data.startswith("acc_"):
@@ -432,6 +469,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML", business_connection_id=streak["connection_id_a"]
             )
 
+    elif data.startswith("add_"):
+        await handle_add_choice(update, context)
+
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
@@ -443,14 +483,19 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("🔥 <b>Восстановлено за 25 ⭐!</b>", parse_mode="HTML")
 
 async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("⏰ Запуск check_midnight")
     for s in get_all_streaks():
-        if s["is_gray"] == 1: continue
+        if s["is_gray"] == 1: 
+            continue
         
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
             msg = await context.bot.send_message(
-                chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
-                reply_markup=keyboard, business_connection_id=s["connection_id_a"]
+                chat_id=s["chat_id"], 
+                text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку (нужно обоим):",
+                parse_mode="HTML",
+                reply_markup=keyboard, 
+                business_connection_id=s["connection_id_a"]
             )
             set_gray(s["chat_id"], msg.message_id)
             logger.info(f"✅ Отправлено сообщение о сером огоньке в {s['chat_id']}")
@@ -469,7 +514,6 @@ async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=s["chat_id"], text="⚪ Напоминание: огонек серый!", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
         except: pass
 
-# АВТООБНОВЛЕНИЕ ПРИ ПОДКЛЮЧЕНИИ
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = update.business_connection
     if conn.is_enabled:
@@ -495,7 +539,7 @@ application.add_handler(CommandHandler("admin", admin_command))
 application.add_handler(CommandHandler("adm", adm_command))
 application.add_handler(CommandHandler("send", send_invite_command))
 application.add_handler(CommandHandler("l", force_check))
-application.add_handler(CommandHandler("test_midnight", test_midnight_command))
+application.add_handler(CommandHandler("add", add_command))
 
 application.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
 application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
