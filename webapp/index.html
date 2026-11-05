@@ -40,7 +40,6 @@
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
         
-        /* Стили для ошибки и лоадера */
         .model-error { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; }
         .loader-text { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ffd700; font-size: 16px; font-weight: bold; display: none; z-index: 100; pointer-events: none;}
     </style>
@@ -84,7 +83,6 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
-        // Безопасный импорт Base64 из файла (если он есть)
         let BASE64_MODEL = null;
         try {
             const module = await import('./model.js');
@@ -180,33 +178,36 @@
                 currentFire = null;
             }
             modelErrorEl.style.display = 'none';
-            loaderTextEl.style.display = 'block'; // Показываем загрузку
+            loaderTextEl.style.display = 'block';
 
-            // 1. Проверяем Base64 из model.js
-            if (BASE64_MODEL && typeof BASE64_MODEL === 'string' && BASE64_MODEL.length > 100) {
-                try {
-                    const binaryString = atob(BASE64_MODEL);
-                    const bytes = new Uint8Array(binaryString.length);
-                    for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    loader.parse(bytes.buffer, '', (gltf) => {
-                        setupModel(gltf.scene);
-                        loaderTextEl.style.display = 'none';
-                    });
-                    return;
-                } catch (e) {
-                    console.error("Ошибка Base64 из файла:", e);
-                }
+            // 1. Сначала пробуем скачать файл напрямую
+            const directUrl = `/api/model/${fileName}`;
+            console.log("Попытка прямой загрузки:", directUrl);
+
+            try {
+                const response = await fetch(directUrl);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const arrayBuffer = await response.arrayBuffer();
+                
+                loader.parse(arrayBuffer, '', (gltf) => {
+                    console.log(`✅ Модель ${fileName} загружена напрямую!`);
+                    setupModel(gltf.scene);
+                    loaderTextEl.style.display = 'none';
+                }, (err) => {
+                    console.warn(`⚠️ Ошибка парсинга прямой модели, пробуем Base64...`);
+                    loadFromApiBase64(fileName);
+                });
+
+            } catch (err) {
+                console.warn(`⚠️ Прямая загрузка не удалась (${err.message}), пробуем Base64...`);
+                loadFromApiBase64(fileName);
             }
-
-            // 2. Если нет, грузим через API (Base64)
-            loadFromApi(fileName);
         }
 
-        async function loadFromApi(fileName) {
-            // ВАЖНО: используем эндпоинт /api/model_base64/
+        async function loadFromApiBase64(fileName, attempt = 1) {
             const url = `/api/model_base64/${fileName}`;
+            console.log(`Попытка Base64 (попытка ${attempt}):`, url);
             
             try {
                 const response = await fetch(url);
@@ -215,30 +216,33 @@
                 const data = await response.json();
                 if (!data.base64) throw new Error("Пустой ответ от API");
                 
-                // Декодируем
                 const binaryString = atob(data.base64);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
                 }
                 
-                // Парсим
                 loader.parse(bytes.buffer, '', (gltf) => {
-                    console.log(`✅ Модель ${fileName} загружена!`);
+                    console.log(`✅ Модель ${fileName} загружена через Base64!`);
                     setupModel(gltf.scene);
                     loaderTextEl.style.display = 'none';
                 }, (err) => {
-                    console.error(`❌ Ошибка парсинга ${fileName}:`, err);
-                    modelErrorEl.textContent = `⚠️ Ошибка парсинга ${fileName}`;
+                    console.error(`❌ Ошибка парсинга Base64 ${fileName}:`, err);
+                    modelErrorEl.textContent = `⚠️ Ошибка парсинга модели`;
                     modelErrorEl.style.display = 'block';
                     loaderTextEl.style.display = 'none';
                 });
 
             } catch (err) {
-                console.error(`❌ Ошибка загрузки ${fileName}:`, err);
-                modelErrorEl.textContent = `⚠️ Сбой сети при загрузке`;
-                modelErrorEl.style.display = 'block';
-                loaderTextEl.style.display = 'none';
+                console.error(`❌ Попытка ${attempt} Base64 не удалась:`, err);
+                
+                if (attempt < 3) {
+                    setTimeout(() => loadFromApiBase64(fileName, attempt + 1), 2000);
+                } else {
+                    modelErrorEl.textContent = `⚠️ Сбой сети. Сервер не отвечает.`;
+                    modelErrorEl.style.display = 'block';
+                    loaderTextEl.style.display = 'none';
+                }
             }
         }
 
