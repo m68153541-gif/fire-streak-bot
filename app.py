@@ -44,7 +44,6 @@ api_app.add_middleware(
 )
 
 # ==================== БАЗА ДАННЫХ ====================
-# (Без изменений, весь код БД сохранен)
 def get_conn():
     url = DATABASE_URL
     if url.startswith("postgres://"):
@@ -63,22 +62,26 @@ def init_db():
                 restore_count INTEGER DEFAULT 0, active_msg_id BIGINT,
                 user_a_pressed INTEGER DEFAULT 0, user_b_pressed INTEGER DEFAULT 0,
                 total_taps_a INTEGER DEFAULT 0, total_taps_b INTEGER DEFAULT 0,
-                message_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                message_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                model_type TEXT DEFAULT 'standart' -- НОВАЯ КОЛОНКА ДЛЯ МОДЕЛЕЙ
             )
         """)
+        # Добавляем колонку, если база уже существует и в ней нет model_type
+        try:
+            c.execute("ALTER TABLE streaks ADD COLUMN model_type TEXT DEFAULT 'standart';")
+        except psycopg2.errors.DuplicateColumn:
+            pass # Колонка уже есть
+        
         c.execute("""
             CREATE TABLE IF NOT EXISTS user_connections (
                 user_id BIGINT PRIMARY KEY, connection_id TEXT NOT NULL, peer_chat_id BIGINT
             )
         """)
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         logger.info("✅ БД инициализирована")
     except Exception as e:
         logger.error(f"❌ Ошибка БД: {e}")
 
-# (Функции save_connection, get_connection, get_peer_chat_id, create_streak, get_streak, get_all_streaks, get_user_streaks, increment_message_count, set_gray, press_button, restore_streak, get_unsent_reminders, kill_streak - ВСЕ БЕЗ ИЗМЕНЕНИЙ)
-# ВСТАВЬТЕ ИХ СЮДА ИЗ ПРЕДЫДУЩЕГО КОДА
 def save_connection(user_id, connection_id, peer_chat_id=None):
     conn = get_conn(); c = conn.cursor()
     c.execute("""
@@ -91,20 +94,18 @@ def save_connection(user_id, connection_id, peer_chat_id=None):
 def get_connection(user_id):
     conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT connection_id FROM user_connections WHERE user_id = %s", (user_id,))
-    row = c.fetchone(); conn.close()
-    return row["connection_id"] if row else None
+    row = c.fetchone(); conn.close(); return row["connection_id"] if row else None
 
 def get_peer_chat_id(user_id):
     conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT peer_chat_id FROM user_connections WHERE user_id = %s", (user_id,))
-    row = c.fetchone(); conn.close()
-    return row["peer_chat_id"] if row else None
+    row = c.fetchone(); conn.close(); return row["peer_chat_id"] if row else None
 
 def create_streak(chat_id, conn_id, user_a, user_b):
     conn = get_conn(); c = conn.cursor()
     c.execute("""
-        INSERT INTO streaks (chat_id, connection_id_a, user_a, user_b, streak, is_gray)
-        VALUES (%s, %s, %s, %s, 1, 0) ON CONFLICT(chat_id) DO UPDATE SET
+        INSERT INTO streaks (chat_id, connection_id_a, user_a, user_b, streak, is_gray, model_type)
+        VALUES (%s, %s, %s, %s, 1, 0, 'standart') ON CONFLICT(chat_id) DO UPDATE SET
         connection_id_a = EXCLUDED.connection_id_a, user_a = EXCLUDED.user_a, user_b = EXCLUDED.user_b, streak = 1, is_gray = 0
     """, (chat_id, conn_id, user_a, user_b))
     conn.commit(); conn.close()
@@ -122,6 +123,11 @@ def get_user_streaks(user_id):
     conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
     c.execute("SELECT * FROM streaks WHERE user_a = %s OR user_b = %s ORDER BY streak DESC", (user_id, user_id))
     rows = c.fetchall(); conn.close(); return rows
+
+def set_model(chat_id, model_name):
+    conn = get_conn(); c = conn.cursor()
+    c.execute("UPDATE streaks SET model_type = %s WHERE chat_id = %s", (model_name, chat_id))
+    conn.commit(); conn.close()
 
 def increment_message_count(chat_id):
     conn = get_conn(); c = conn.cursor()
@@ -167,7 +173,6 @@ def kill_streak(chat_id):
     c.execute("DELETE FROM streaks WHERE chat_id = %s", (chat_id,))
     conn.commit(); conn.close()
 
-
 # ==================== API ДЛЯ MINI APP ====================
 @api_app.get("/api/get_user_data")
 async def get_user_data(user_id: int):
@@ -183,20 +188,34 @@ async def get_user_data(user_id: int):
         result.append({
             "chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, 
             "streak": s["streak"], "is_gray": s["is_gray"], 
-            "model": "snow"  # <--- ТЕПЕРЬ ПО УМОЛЧАНИЮ ОТДАЕМ SNOW
+            "model": s["model_type"] or "standart",
+            "total_taps_a": s["total_taps_a"], "total_taps_b": s["total_taps_b"],
+            "user_a": s["user_a"], "user_b": s["user_b"],
+            "created_at": s["created_at"].strftime("%d.%m.%Y")
         })
     return JSONResponse(content={"streaks": result})
 
 @api_app.post("/api/sync_taps")
 async def sync_taps(request: Request):
-    data = await request.json(); user_id = data.get("user_id"); taps = data.get("taps", 0)
-    if not user_id or not taps: return {"status": "error"}
-    conn = get_conn(); c = conn.cursor()
-    c.execute("""
-        UPDATE streaks SET total_taps_a = CASE WHEN user_a = %s THEN total_taps_a + %s ELSE total_taps_a END, 
-        total_taps_b = CASE WHEN user_b = %s THEN total_taps_b + %s ELSE total_taps_b END WHERE user_a = %s OR user_b = %s
-    """, (user_id, taps, user_id, taps, user_id, user_id))
-    conn.commit(); conn.close(); return {"status": "ok"}
+    data = await request.json()
+    user_id = data.get("user_id"); chat_id = data.get("chat_id")
+    if not user_id or not chat_id: return {"status": "error"}
+    conn = get_conn(); c = conn.cursor(cursor_factory=DictCursor)
+    c.execute("SELECT * FROM streaks WHERE chat_id = %s", (chat_id,))
+    row = c.fetchone()
+    if row:
+        if user_id == row["user_a"]: c.execute("UPDATE streaks SET total_taps_a = total_taps_a + 1 WHERE chat_id = %s", (chat_id,))
+        elif user_id == row["user_b"]: c.execute("UPDATE streaks SET total_taps_b = total_taps_b + 1 WHERE chat_id = %s", (chat_id,))
+        conn.commit()
+    conn.close(); return {"status": "ok"}
+
+@api_app.post("/api/set_model")
+async def set_model_api(request: Request):
+    data = await request.json()
+    chat_id = data.get("chat_id"); model_name = data.get("model")
+    if not chat_id or not model_name: return {"status": "error"}
+    set_model(chat_id, model_name)
+    return {"status": "ok"}
 
 @api_app.get("/api/model_base64/{model_name}")
 async def get_model_base64(model_name: str):
@@ -209,11 +228,12 @@ async def get_model_base64(model_name: str):
             encoded_data = base64.b64encode(f.read()).decode("utf-8")
         return JSONResponse(content={"base64": encoded_data})
     except Exception as e:
-        logger.error(f"Ошибка чтения модели {model_name}: {e}")
         return JSONResponse(content={"error": "server error"}, status_code=500)
 
 # ==================== ХЕНДЛЕРЫ БОТА ====================
-# (Вставьте все хендлеры start, com_command, test_command, myfaier_command, admin_command, adm_command, handle_admin_phrase, add_command, handle_add_choice, send_invite_command, force_check, handle_business_message, handle_callback, pre_checkout, successful_payment, check_midnight, remind_gray, on_business_connect, error_handler из предыдущего кода)
+# (Весь код хендлеров start, com, test, myfaier, admin, adm и т.д. остается БЕЗ ИЗМЕНЕНИЙ из предыдущего файла, я его не удалял)
+# Вставьте сюда все функции от async def start(...) до async def error_handler(...)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if context.args and context.args[0].startswith("bizChat"):
@@ -376,6 +396,7 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE): logger.error(f"Ошибка: {context.error}")
 
+# Регистрация хендлеров
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
 application.add_handler(CommandHandler("myfaier", myfaier_command))
