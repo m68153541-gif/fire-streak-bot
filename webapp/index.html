@@ -40,14 +40,17 @@
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
         
+        /* Стили для ошибки и лоадера */
         .model-error { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; }
+        .loader-text { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ffd700; font-size: 16px; font-weight: bold; display: none; z-index: 100; pointer-events: none;}
     </style>
 </head>
 <body>
 
     <div class="ui-layer">
         <div class="speech-bubble" id="speechBubble"></div>
-        <div class="model-error" id="modelError">⚠️ Модель не загружена. Проверьте консоль.</div>
+        <div class="model-error" id="modelError">⚠️ Модель не загружена</div>
+        <div class="loader-text" id="loaderText">⏳ Загрузка огонька...</div>
 
         <div class="top-bar">
             <div class="currency-panel">⭐ <span id="currencyCount">0</span></div>
@@ -81,13 +84,13 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
-        // Безопасный импорт Base64
+        // Безопасный импорт Base64 из файла (если он есть)
         let BASE64_MODEL = null;
         try {
             const module = await import('./model.js');
             BASE64_MODEL = module.BASE64_MODEL || null;
         } catch (e) {
-            console.log("model.js не найден или пуст, используем API.");
+            console.log("model.js пуст. Будем использовать API.");
         }
 
         const tg = window.Telegram.WebApp;
@@ -126,10 +129,9 @@
         let currentFire = null;
         let friendsData = [];
         let currentFriendIndex = 0;
+        
         const modelErrorEl = document.getElementById('modelError');
-
-        // Используем API для загрузки моделей, чтобы обойти CORS в Telegram WebView
-        const API_BASE_URL = "/api/model/"; 
+        const loaderTextEl = document.getElementById('loaderText');
 
         function getAvatarColor(id) {
             const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8'];
@@ -178,58 +180,65 @@
                 currentFire = null;
             }
             modelErrorEl.style.display = 'none';
+            loaderTextEl.style.display = 'block'; // Показываем загрузку
 
-            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка есть)
+            // 1. Проверяем Base64 из model.js
             if (BASE64_MODEL && typeof BASE64_MODEL === 'string' && BASE64_MODEL.length > 100) {
-                console.log("Загрузка из Base64...");
                 try {
                     const binaryString = atob(BASE64_MODEL);
-                    const len = binaryString.length;
-                    const bytes = new Uint8Array(len);
-                    for (let i = 0; i < len; i++) {
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
                         bytes[i] = binaryString.charCodeAt(i);
                     }
-                    
                     loader.parse(bytes.buffer, '', (gltf) => {
-                        console.log("✅ Модель из Base64 загружена!");
                         setupModel(gltf.scene);
-                    }, (err) => {
-                        console.error("❌ Ошибка парсинга Base64:", err);
-                        loadFromApi(fileName); // Fallback
+                        loaderTextEl.style.display = 'none';
                     });
                     return;
                 } catch (e) {
-                    console.error("Ошибка декодирования Base64:", e);
+                    console.error("Ошибка Base64 из файла:", e);
                 }
             }
 
-            // 2. ГРУЗИМ ЧЕРЕЗ API (ОБХОД CORS)
+            // 2. Если нет, грузим через API (Base64)
             loadFromApi(fileName);
         }
 
         async function loadFromApi(fileName) {
-            const url = `${API_BASE_URL}${fileName}`;
-            console.log("Попытка загрузить через API:", url);
-
+            // ВАЖНО: используем эндпоинт /api/model_base64/
+            const url = `/api/model_base64/${fileName}`;
+            
             try {
                 const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
-                const arrayBuffer = await response.arrayBuffer();
+                const data = await response.json();
+                if (!data.base64) throw new Error("Пустой ответ от API");
                 
-                loader.parse(arrayBuffer, '', (gltf) => {
-                    console.log("✅ Модель загружена через API!");
+                // Декодируем
+                const binaryString = atob(data.base64);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                // Парсим
+                loader.parse(bytes.buffer, '', (gltf) => {
+                    console.log(`✅ Модель ${fileName} загружена!`);
                     setupModel(gltf.scene);
+                    loaderTextEl.style.display = 'none';
                 }, (err) => {
-                    console.error(`❌ Ошибка парсинга модели ${fileName}:`, err);
+                    console.error(`❌ Ошибка парсинга ${fileName}:`, err);
                     modelErrorEl.textContent = `⚠️ Ошибка парсинга ${fileName}`;
                     modelErrorEl.style.display = 'block';
+                    loaderTextEl.style.display = 'none';
                 });
 
             } catch (err) {
-                console.error(`❌ Ошибка загрузки ${fileName} через API:`, err);
-                modelErrorEl.textContent = `⚠️ Не удалось загрузить ${fileName}. Проверьте консоль.`;
+                console.error(`❌ Ошибка загрузки ${fileName}:`, err);
+                modelErrorEl.textContent = `⚠️ Сбой сети при загрузке`;
                 modelErrorEl.style.display = 'block';
+                loaderTextEl.style.display = 'none';
             }
         }
 
@@ -245,7 +254,6 @@
             currentFire.position.y = -box.min.y * scale; 
             
             scene.add(currentFire);
-            modelErrorEl.style.display = 'none';
         }
 
         function renderFriendsList() {
@@ -283,7 +291,6 @@
                 const intersects = raycaster.intersectObject(currentFire, true);
                 if (intersects.length > 0) {
                     showMessage("Я тебя обожаю! ❤️");
-                    // Здесь можно добавить вызов API для синхронизации тапов, если нужно
                 }
             }
         });
