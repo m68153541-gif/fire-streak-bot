@@ -115,9 +115,6 @@
         let friendsData = [];
         let currentFriendIndex = 0;
 
-        // Ссылка на jsDelivr (прямой доступ к твоему GitHub)
-        const CDN_BASE_URL = "https://cdn.jsdelivr.net/gh/m68153541-gif/fire-streak-bot@main/webapp/";
-
         async function loadData() {
             try {
                 const res = await fetch(`/api/get_user_data?user_id=${tgUser.id}`);
@@ -133,9 +130,6 @@
                 friendsData = data.streaks || [];
                 if (friendsData.length > 0) {
                     updateUI();
-                } else {
-                    document.getElementById('fireNameTag').textContent = "Нет огоньков";
-                    document.getElementById('fireDaysTag').textContent = "Создай первый в боте!";
                 }
             } catch (e) { console.error("API Error:", e); }
         }
@@ -150,24 +144,33 @@
             let modelFile = "standart.glb";
             if (f.is_gray) modelFile = "hold.glb";
 
-            loadModel(modelFile);
+            // Вызываем новую функцию загрузки через fetch
+            loadModelFetch(modelFile);
             renderFriendsList();
         }
 
-        function loadModel(fileName) {
+        // НОВЫЙ СПОСОБ: скачиваем файл как Blob и отдаем загрузчику
+        async function loadModelFetch(fileName) {
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
             }
-            
-            // ПУТЬ ЧЕРЕЗ JSDELIVR
-            const modelPath = `${CDN_BASE_URL}${fileName}`;
-            console.log("Загрузка модели:", modelPath);
 
-            loader.load(modelPath, 
-                (gltf) => {
-                    console.log("✅ Модель загружена:", fileName);
+            // Пробуем загрузить локально (относительно index.html)
+            const url = `./${fileName}`;
+            console.log(`Загрузка через fetch: ${url}`);
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const blob = await response.blob();
+                const blobUrl = URL.createObjectURL(blob);
+
+                loader.load(blobUrl, (gltf) => {
+                    console.log(`✅ Модель успешно загружена: ${fileName}`);
                     currentFire = gltf.scene;
+                    
                     const box = new THREE.Box3().setFromObject(currentFire);
                     const size = box.getSize(new THREE.Vector3());
                     const maxDim = Math.max(size.x, size.y, size.z);
@@ -178,19 +181,18 @@
                     currentFire.position.y = -box.min.y * scale; 
                     
                     scene.add(currentFire);
-                }, 
-                undefined,
-                (err) => {
-                    console.error(`❌ Ошибка загрузки ${fileName}:`, err);
-                    if (!currentFire) {
-                        const geo = new THREE.BoxGeometry(2, 2, 2);
-                        const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
-                        currentFire = new THREE.Mesh(geo, mat);
-                        currentFire.position.y = 1;
-                        scene.add(currentFire);
-                    }
+                });
+            } catch (err) {
+                console.error(`❌ Ошибка загрузки модели ${fileName}:`, err);
+                // Заглушка
+                if (!currentFire) {
+                    const geo = new THREE.BoxGeometry(2, 2, 2);
+                    const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
+                    currentFire = new THREE.Mesh(geo, mat);
+                    currentFire.position.y = 1;
+                    scene.add(currentFire);
                 }
-            );
+            }
         }
 
         function renderFriendsList() {
