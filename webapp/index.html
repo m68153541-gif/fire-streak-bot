@@ -82,7 +82,8 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'; // Для сжатых моделей
+
         let BASE64_MODEL = null;
         try {
             const module = await import('./model.js');
@@ -124,6 +125,12 @@
 
         // --- Логика ---
         const loader = new GLTFLoader();
+        
+        // Подключаем DRACO на случай, если модель сжата
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        loader.setDRACOLoader(dracoLoader);
+
         let currentFire = null;
         let friendsData = [];
         let currentFriendIndex = 0;
@@ -165,8 +172,16 @@
             document.getElementById('fireNameTag').textContent = f.name + ' ✏️';
             document.getElementById('fireDaysTag').textContent = `🔥 вместе ${f.streak} дней`;
 
+            // Логика выбора модели
             let modelFile = "standart.glb";
-            if (f.is_gray) modelFile = "hold.glb";
+            
+            if (f.is_gray) {
+                modelFile = "hold.glb";
+            } else if (f.model === "snow") {
+                modelFile = "snow.glb"; // <--- ГРУЗИМ SNOW.GLB
+            } else if (f.model === "happy") {
+                modelFile = "happy.glb";
+            }
 
             loadModel(modelFile);
             renderFriendsList();
