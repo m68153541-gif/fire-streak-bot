@@ -77,6 +77,8 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // Импортируем модель из отдельного файла
+        import { BASE64_MODEL } from './model.js';
 
         const tg = window.Telegram.WebApp;
         tg.ready();
@@ -115,6 +117,9 @@
         let friendsData = [];
         let currentFriendIndex = 0;
 
+        // Резервная ссылка на jsDelivr (если Base64 не сработает)
+        const CDN_BASE_URL = "https://cdn.jsdelivr.net/gh/m68153541-gif/fire-streak-bot@main/webapp/";
+
         async function loadData() {
             try {
                 const res = await fetch(`/api/get_user_data?user_id=${tgUser.id}`);
@@ -144,55 +149,67 @@
             let modelFile = "standart.glb";
             if (f.is_gray) modelFile = "hold.glb";
 
-            // Вызываем новую функцию загрузки через fetch
-            loadModelFetch(modelFile);
+            loadModel(modelFile);
             renderFriendsList();
         }
 
-        // НОВЫЙ СПОСОБ: скачиваем файл как Blob и отдаем загрузчику
-        async function loadModelFetch(fileName) {
+        function loadModel(fileName) {
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
             }
 
-            // Пробуем загрузить локально (относительно index.html)
-            const url = `./${fileName}`;
-            console.log(`Загрузка через fetch: ${url}`);
-
-            try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                
-                const blob = await response.blob();
-                const blobUrl = URL.createObjectURL(blob);
-
-                loader.load(blobUrl, (gltf) => {
-                    console.log(`✅ Модель успешно загружена: ${fileName}`);
-                    currentFire = gltf.scene;
+            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка вставлена)
+            if (BASE64_MODEL && BASE64_MODEL.length > 100) {
+                console.log("Загрузка из Base64...");
+                try {
+                    const binaryString = atob(BASE64_MODEL);
+                    const len = binaryString.length;
+                    const bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
                     
-                    const box = new THREE.Box3().setFromObject(currentFire);
-                    const size = box.getSize(new THREE.Vector3());
-                    const maxDim = Math.max(size.x, size.y, size.z);
-                    const scale = 2.5 / maxDim; 
-                    
-                    currentFire.scale.set(scale, scale, scale);
-                    currentFire.position.set(0, 0, 0); 
-                    currentFire.position.y = -box.min.y * scale; 
-                    
-                    scene.add(currentFire);
-                });
-            } catch (err) {
-                console.error(`❌ Ошибка загрузки модели ${fileName}:`, err);
-                // Заглушка
-                if (!currentFire) {
-                    const geo = new THREE.BoxGeometry(2, 2, 2);
-                    const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
-                    currentFire = new THREE.Mesh(geo, mat);
-                    currentFire.position.y = 1;
-                    scene.add(currentFire);
+                    loader.parse(bytes.buffer, '', (gltf) => {
+                        console.log("✅ Модель из Base64 загружена!");
+                        setupModel(gltf.scene);
+                    });
+                    return; // Выходим, если Base64 сработал
+                } catch (e) {
+                    console.error("Ошибка Base64:", e);
                 }
             }
+
+            // 2. ЕСЛИ BASE64 ПУСТ, ГРУЗИМ С JSDELIVR
+            const url = `${CDN_BASE_URL}${fileName}`;
+            console.log("Попытка загрузить с CDN:", url);
+
+            loader.load(url, (gltf) => {
+                console.log("✅ Модель загружена с CDN!");
+                setupModel(gltf.scene);
+            }, undefined, (err) => {
+                console.error(`❌ Ошибка загрузки ${fileName}:`, err);
+                // Куб-заглушка
+                const geo = new THREE.BoxGeometry(2, 2, 2);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
+                currentFire = new THREE.Mesh(geo, mat);
+                currentFire.position.y = 1;
+                scene.add(currentFire);
+            });
+        }
+
+        function setupModel(model) {
+            currentFire = model;
+            const box = new THREE.Box3().setFromObject(currentFire);
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const scale = 2.5 / maxDim; 
+            
+            currentFire.scale.set(scale, scale, scale);
+            currentFire.position.set(0, 0, 0); 
+            currentFire.position.y = -box.min.y * scale; 
+            
+            scene.add(currentFire);
         }
 
         function renderFriendsList() {
