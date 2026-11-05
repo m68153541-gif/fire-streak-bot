@@ -54,6 +54,8 @@ def init_db():
     try:
         conn = get_conn()
         c = conn.cursor()
+        
+        # 1. Создаем таблицу со всеми колонками для новых баз
         c.execute("""
             CREATE TABLE IF NOT EXISTS streaks (
                 id SERIAL PRIMARY KEY, chat_id BIGINT UNIQUE NOT NULL,
@@ -63,22 +65,33 @@ def init_db():
                 user_a_pressed INTEGER DEFAULT 0, user_b_pressed INTEGER DEFAULT 0,
                 total_taps_a INTEGER DEFAULT 0, total_taps_b INTEGER DEFAULT 0,
                 message_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                model_type TEXT DEFAULT 'standart' -- НОВАЯ КОЛОНКА ДЛЯ МОДЕЛЕЙ
+                model_type TEXT DEFAULT 'standart'
             )
         """)
-        # Добавляем колонку, если база уже существует и в ней нет model_type
-        try:
-            c.execute("ALTER TABLE streaks ADD COLUMN model_type TEXT DEFAULT 'standart';")
-        except psycopg2.errors.DuplicateColumn:
-            pass # Колонка уже есть
+        
+        # 2. Безопасно добавляем недостающие колонки для СТАРЫХ баз (не удаляя данные)
+        columns_to_add = [
+            ("total_taps_a", "INTEGER DEFAULT 0"),
+            ("total_taps_b", "INTEGER DEFAULT 0"),
+            ("model_type", "TEXT DEFAULT 'standart'"),
+            ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        ]
+        
+        for col_name, col_type in columns_to_add:
+            try:
+                c.execute(f"ALTER TABLE streaks ADD COLUMN {col_name} {col_type};")
+                logger.info(f"✅ Добавлена колонка: {col_name}")
+            except psycopg2.errors.DuplicateColumn:
+                pass # Колонка уже есть, всё отлично
         
         c.execute("""
             CREATE TABLE IF NOT EXISTS user_connections (
                 user_id BIGINT PRIMARY KEY, connection_id TEXT NOT NULL, peer_chat_id BIGINT
             )
         """)
+        
         conn.commit(); conn.close()
-        logger.info("✅ БД инициализирована")
+        logger.info("✅ БД инициализирована (данные сохранены)")
     except Exception as e:
         logger.error(f"❌ Ошибка БД: {e}")
 
@@ -176,24 +189,35 @@ def kill_streak(chat_id):
 # ==================== API ДЛЯ MINI APP ====================
 @api_app.get("/api/get_user_data")
 async def get_user_data(user_id: int):
-    streaks = get_user_streaks(user_id)
-    result = []
-    for s in streaks:
-        partner_id = s["user_b"] if s["user_a"] == user_id else s["user_a"]
-        partner_name = f"ID:{partner_id}"
-        try:
-            chat = await application.bot.get_chat(partner_id)
-            partner_name = f"@{chat.username}" if chat.username else chat.first_name
-        except: pass
-        result.append({
-            "chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, 
-            "streak": s["streak"], "is_gray": s["is_gray"], 
-            "model": s["model_type"] or "standart",
-            "total_taps_a": s["total_taps_a"], "total_taps_b": s["total_taps_b"],
-            "user_a": s["user_a"], "user_b": s["user_b"],
-            "created_at": s["created_at"].strftime("%d.%m.%Y")
-        })
-    return JSONResponse(content={"streaks": result})
+    try:
+        streaks = get_user_streaks(user_id)
+        result = []
+        for s in streaks:
+            partner_id = s["user_b"] if s["user_a"] == user_id else s["user_a"]
+            partner_name = f"ID:{partner_id}"
+            try:
+                chat = await application.bot.get_chat(partner_id)
+                partner_name = f"@{chat.username}" if chat.username else chat.first_name
+            except: pass
+            
+            # Безопасное извлечение данных (на случай, если колонка пустая)
+            taps_a = s.get("total_taps_a", 0) or 0
+            taps_b = s.get("total_taps_b", 0) or 0
+            created = s.get("created_at")
+            created_str = created.strftime("%d.%m.%Y") if created else "Недавно"
+
+            result.append({
+                "chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, 
+                "streak": s["streak"], "is_gray": s["is_gray"], 
+                "model": s.get("model_type") or "standart",
+                "total_taps_a": taps_a, "total_taps_b": taps_b,
+                "user_a": s["user_a"], "user_b": s["user_b"],
+                "created_at": created_str
+            })
+        return JSONResponse(content={"streaks": result})
+    except Exception as e:
+        logger.error(f"API Error: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @api_app.post("/api/sync_taps")
 async def sync_taps(request: Request):
@@ -231,9 +255,6 @@ async def get_model_base64(model_name: str):
         return JSONResponse(content={"error": "server error"}, status_code=500)
 
 # ==================== ХЕНДЛЕРЫ БОТА ====================
-# (Весь код хендлеров start, com, test, myfaier, admin, adm и т.д. остается БЕЗ ИЗМЕНЕНИЙ из предыдущего файла, я его не удалял)
-# Вставьте сюда все функции от async def start(...) до async def error_handler(...)
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if context.args and context.args[0].startswith("bizChat"):
@@ -396,7 +417,6 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE): logger.error(f"Ошибка: {context.error}")
 
-# Регистрация хендлеров
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("com", com_command))
 application.add_handler(CommandHandler("myfaier", myfaier_command))
