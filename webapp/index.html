@@ -34,9 +34,6 @@
         .friend-item.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.5); }
         .friend-item .profile-name { font-size: 11px; color: white; margin-top: 3px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
         
-        .action-buttons { display: flex; justify-content: center; gap: 10px; }
-        .action-btn { background: linear-gradient(135deg, #3390ec, #0056b3); color: white; border: none; padding: 10px 20px; border-radius: 15px; font-size: 14px; font-weight: 900; cursor: pointer; box-shadow: 0 4px 10px rgba(0, 86, 179, 0.4); }
-        
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
         
@@ -82,23 +79,13 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'; // Для сжатых моделей
-
-        let BASE64_MODEL = null;
-        try {
-            const module = await import('./model.js');
-            BASE64_MODEL = module.BASE64_MODEL || null;
-        } catch (e) {
-            console.log("model.js пуст. Будем использовать API.");
-        }
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
         const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
+        tg.ready(); tg.expand();
         
         const tgUser = tg.initDataUnsafe?.user || { id: 0, first_name: "User", username: "user" };
 
-        // --- Сцена ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a2e); 
         
@@ -112,21 +99,14 @@
         document.body.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.enablePan = false;
-        controls.maxPolarAngle = Math.PI / 2; 
-        controls.target.set(0, 1.5, 0);
+        controls.enableDamping = true; controls.enablePan = false;
+        controls.maxPolarAngle = Math.PI / 2; controls.target.set(0, 1.5, 0);
 
-        // --- Свет ---
         scene.add(new THREE.AmbientLight(0xffffff, 1.5));
         const keyLight = new THREE.DirectionalLight(0xffffff, 2);
-        keyLight.position.set(5, 10, 5);
-        scene.add(keyLight);
+        keyLight.position.set(5, 10, 5); scene.add(keyLight);
 
-        // --- Логика ---
         const loader = new GLTFLoader();
-        
-        // Подключаем DRACO на случай, если модель сжата
         const dracoLoader = new DRACOLoader();
         dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
         loader.setDRACOLoader(dracoLoader);
@@ -134,7 +114,6 @@
         let currentFire = null;
         let friendsData = [];
         let currentFriendIndex = 0;
-        
         const modelErrorEl = document.getElementById('modelError');
         const loaderTextEl = document.getElementById('loaderText');
 
@@ -149,19 +128,15 @@
                 const data = await res.json();
                 
                 document.getElementById('myName').textContent = "@" + (tgUser.username || tgUser.first_name);
-                
                 const avatarEl = document.getElementById('myAvatar');
-                if (tgUser.photo_url) {
-                    avatarEl.innerHTML = `<img src="${tgUser.photo_url}" alt="Avatar">`;
-                } else {
+                if (tgUser.photo_url) avatarEl.innerHTML = `<img src="${tgUser.photo_url}" alt="Avatar">`;
+                else {
                     avatarEl.style.backgroundColor = getAvatarColor(tgUser.id);
                     avatarEl.textContent = (tgUser.first_name || "U")[0].toUpperCase();
                 }
 
                 friendsData = data.streaks || [];
-                if (friendsData.length > 0) {
-                    updateUI();
-                }
+                if (friendsData.length > 0) updateUI();
             } catch (e) { console.error("API Error:", e); }
         }
 
@@ -172,22 +147,17 @@
             document.getElementById('fireNameTag').textContent = f.name + ' ✏️';
             document.getElementById('fireDaysTag').textContent = `🔥 вместе ${f.streak} дней`;
 
-            // Логика выбора модели
             let modelFile = "standart.glb";
-            
-            if (f.is_gray) {
-                modelFile = "hold.glb";
-            } else if (f.model === "snow") {
-                modelFile = "snow.glb"; // <--- ГРУЗИМ SNOW.GLB
-            } else if (f.model === "happy") {
-                modelFile = "happy.glb";
-            }
+            if (f.is_gray) modelFile = "hold.glb";
+            else if (f.model === "snow") modelFile = "snow.glb";
+            else if (f.model === "happy") modelFile = "happy.glb";
 
             loadModel(modelFile);
             renderFriendsList();
         }
 
-        async function loadModel(fileName) {
+        // ГРУЗИМ ТОЛЬКО ЧЕРЕЗ BASE64 API (Самый надежный способ для Telegram)
+        async function loadModel(fileName, attempt = 1) {
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
@@ -195,41 +165,15 @@
             modelErrorEl.style.display = 'none';
             loaderTextEl.style.display = 'block';
 
-            // 1. Сначала пробуем скачать файл напрямую
-            const directUrl = `/api/model/${fileName}`;
-            console.log("Попытка прямой загрузки:", directUrl);
-
-            try {
-                const response = await fetch(directUrl);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                
-                const arrayBuffer = await response.arrayBuffer();
-                
-                loader.parse(arrayBuffer, '', (gltf) => {
-                    console.log(`✅ Модель ${fileName} загружена напрямую!`);
-                    setupModel(gltf.scene);
-                    loaderTextEl.style.display = 'none';
-                }, (err) => {
-                    console.warn(`⚠️ Ошибка парсинга прямой модели, пробуем Base64...`);
-                    loadFromApiBase64(fileName);
-                });
-
-            } catch (err) {
-                console.warn(`⚠️ Прямая загрузка не удалась (${err.message}), пробуем Base64...`);
-                loadFromApiBase64(fileName);
-            }
-        }
-
-        async function loadFromApiBase64(fileName, attempt = 1) {
             const url = `/api/model_base64/${fileName}`;
-            console.log(`Попытка Base64 (попытка ${attempt}):`, url);
+            console.log(`[Попытка ${attempt}] Загрузка Base64:`, url);
             
             try {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 const data = await response.json();
-                if (!data.base64) throw new Error("Пустой ответ от API");
+                if (!data.base64) throw new Error("Пустой ответ");
                 
                 const binaryString = atob(data.base64);
                 const bytes = new Uint8Array(binaryString.length);
@@ -238,27 +182,29 @@
                 }
                 
                 loader.parse(bytes.buffer, '', (gltf) => {
-                    console.log(`✅ Модель ${fileName} загружена через Base64!`);
+                    console.log(`✅ Модель ${fileName} загружена!`);
                     setupModel(gltf.scene);
                     loaderTextEl.style.display = 'none';
                 }, (err) => {
-                    console.error(`❌ Ошибка парсинга Base64 ${fileName}:`, err);
-                    modelErrorEl.textContent = `⚠️ Ошибка парсинга модели`;
-                    modelErrorEl.style.display = 'block';
-                    loaderTextEl.style.display = 'none';
+                    console.error(`❌ Ошибка парсинга ${fileName}:`, err);
+                    showError(`⚠️ Ошибка 3D-модели`);
                 });
 
             } catch (err) {
-                console.error(`❌ Попытка ${attempt} Base64 не удалась:`, err);
+                console.error(`❌ Ошибка сети (попытка ${attempt}):`, err);
                 
                 if (attempt < 3) {
-                    setTimeout(() => loadFromApiBase64(fileName, attempt + 1), 2000);
+                    setTimeout(() => loadModel(fileName, attempt + 1), 2000);
                 } else {
-                    modelErrorEl.textContent = `⚠️ Сбой сети. Сервер не отвечает.`;
-                    modelErrorEl.style.display = 'block';
-                    loaderTextEl.style.display = 'none';
+                    showError(`⚠️ Сбой сети. Попробуйте позже.`);
                 }
             }
+        }
+
+        function showError(msg) {
+            modelErrorEl.textContent = msg;
+            modelErrorEl.style.display = 'block';
+            loaderTextEl.style.display = 'none';
         }
 
         function setupModel(model) {
