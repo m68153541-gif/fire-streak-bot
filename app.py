@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
 import uvicorn
+import base64 # Добавлено для Base64-эндпоинта
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -238,6 +239,34 @@ async def sync_taps(request: Request):
     conn.commit(); conn.close()
     return {"status": "ok"}
 
+# === НОВЫЕ ЭНДПОИНТЫ ДЛЯ МОДЕЛЕЙ (ОБХОД CORS) ===
+
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+
+@api_app.get("/api/model/{model_name}")
+async def get_model_file(model_name: str):
+    if ".." in model_name or "/" in model_name:
+        return JSONResponse(content={"error": "invalid name"}, status_code=400)
+    file_path = os.path.join(WEBAPP_DIR, model_name)
+    if not os.path.exists(file_path):
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    
+    response = FileResponse(file_path, media_type="model/gltf-binary")
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+@api_app.get("/api/model_base64/{model_name}")
+async def get_model_base64(model_name: str):
+    if ".." in model_name or "/" in model_name:
+        return JSONResponse(content={"error": "invalid"}, status_code=400)
+    file_path = os.path.join(WEBAPP_DIR, model_name)
+    if not os.path.exists(file_path):
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    with open(file_path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("utf-8")
+    return JSONResponse(content={"base64": data})
+
 # ==================== ХЕНДЛЕРЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -452,8 +481,7 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return Response(status_code=200)
 
-# === ЖЕСТКИЙ ПУТЬ К WEBAPP ===
-WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+# === МОНТИРОВАНИЕ WEBAPP ===
 if not os.path.exists(WEBAPP_DIR):
     logger.warning(f"⚠️ Папка {WEBAPP_DIR} не найдена! Модели не будут загружаться.")
 
