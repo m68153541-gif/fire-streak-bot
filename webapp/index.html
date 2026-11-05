@@ -30,7 +30,6 @@
         .friend-item { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.5; transition: 0.2s; min-width: 60px; }
         .friend-item.active { opacity: 1; transform: scale(1.1); }
         
-        /* Аватарки друзей */
         .friend-item .avatar-circle { width: 45px; height: 45px; border-radius: 50%; background: linear-gradient(135deg, #3390ec, #00c6ff); border: 2px solid transparent; display: flex; justify-content: center; align-items: center; font-size: 18px; color: white; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
         .friend-item.active .avatar-circle { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.5); }
         .friend-item .profile-name { font-size: 11px; color: white; margin-top: 3px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
@@ -40,9 +39,6 @@
         
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
-
-        .catalog-panel { position: absolute; bottom: -100%; left: 0; width: 100%; background: #2b2b44; transition: 0.3s; z-index: 20; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; border-radius: 20px 20px 0 0; }
-        .catalog-panel h2 { color: white; margin: 0 0 10px 0; }
     </style>
 </head>
 <body>
@@ -65,16 +61,7 @@
 
         <div class="bottom-panel">
             <div class="friends-row" id="friendsRow"></div>
-            <div class="action-buttons">
-                <button class="action-btn" onclick="toggleCatalog()">🛍 Каталог</button>
-            </div>
         </div>
-    </div>
-
-    <div id="catalogPanel" class="catalog-panel">
-        <h2>Стили</h2>
-        <div id="catalogItems" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
-        <button class="action-btn" style="background: #444; margin-top: 10px;" onclick="toggleCatalog()">Закрыть</button>
     </div>
 
     <script type="importmap">
@@ -94,7 +81,6 @@
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
-        tg.setHeaderColor('#1a1a2e');
         
         const tgUser = tg.initDataUnsafe?.user || { id: 0, first_name: "User", username: "user" };
 
@@ -109,40 +95,28 @@
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.enablePan = false;
         controls.maxPolarAngle = Math.PI / 2; 
-        controls.minDistance = 5;
-        controls.maxDistance = 15;
         controls.target.set(0, 1.5, 0);
 
-        // --- Свет и Подиум ---
+        // --- Свет ---
         scene.add(new THREE.AmbientLight(0xffffff, 1.5));
         const keyLight = new THREE.DirectionalLight(0xffffff, 2);
         keyLight.position.set(5, 10, 5);
-        keyLight.castShadow = true;
         scene.add(keyLight);
-        const rimLight = new THREE.DirectionalLight(0x3390ec, 2);
-        rimLight.position.set(-5, 5, -5);
-        scene.add(rimLight);
-
-        const podiumGeo = new THREE.CylinderGeometry(3, 3.2, 0.5, 32);
-        const podiumMat = new THREE.MeshStandardMaterial({ color: 0x1e1e30, roughness: 0.5 });
-        const podium = new THREE.Mesh(podiumGeo, podiumMat);
-        podium.position.y = -0.25;
-        podium.receiveShadow = true;
-        scene.add(podium);
 
         // --- Логика ---
         const loader = new GLTFLoader();
         let currentFire = null;
-        let currentFriendIndex = 0;
         let friendsData = [];
-        let totalTaps = 0;
+        let currentFriendIndex = 0;
+
+        // ТВОЙ РЕПОЗИТОРИЙ НА GITHUB (для третьего пути)
+        const GITHUB_RAW_URL = "https://raw.githubusercontent.com/m68153541-gif/fire-streak-bot/main/webapp/";
 
         async function loadData() {
             try {
@@ -158,15 +132,9 @@
 
                 friendsData = data.streaks || [];
                 if (friendsData.length > 0) {
-                    currentFriendIndex = 0;
                     updateUI();
-                } else {
-                    document.getElementById('fireNameTag').textContent = "Нет огоньков";
-                    document.getElementById('fireDaysTag').textContent = "Создай первый в боте!";
                 }
-            } catch (e) {
-                console.error("Ошибка API:", e);
-            }
+            } catch (e) { console.error("API Error:", e); }
         }
 
         function updateUI() {
@@ -178,45 +146,63 @@
 
             let modelFile = "standart.glb";
             if (f.is_gray) modelFile = "hold.glb";
-            else if (f.model === "snow") modelFile = "snow.glb";
 
-            loadModel(modelFile);
+            // КАСКАДНЫЙ ЗАГРУЗЧИК
+            loadModelWithFallback(modelFile);
             renderFriendsList();
         }
 
-        function loadModel(fileName) {
-            if (currentFire) scene.remove(currentFire);
-            
-            // Жесткий путь
-            const modelPath = `./${fileName}`;
-            console.log("Загрузка модели:", modelPath);
+        async function loadModelWithFallback(fileName) {
+            if (currentFire) {
+                scene.remove(currentFire);
+                currentFire = null;
+            }
 
-            loader.load(modelPath, (gltf) => {
-                currentFire = gltf.scene;
-                const box = new THREE.Box3().setFromObject(currentFire);
-                const size = box.getSize(new THREE.Vector3());
-                const maxDim = Math.max(size.x, size.y, size.z);
-                const scale = 2.5 / maxDim; 
+            // Список путей для попытки
+            const paths = [
+                `./${fileName}`,                  // 1. Локально
+                `/webapp/${fileName}`,            // 2. Через сервер
+                `${GITHUB_RAW_URL}${fileName}`    // 3. Напрямую с GitHub
+            ];
+
+            for (let i = 0; i < paths.length; i++) {
+                const path = paths[i];
+                console.log(`Попытка ${i+1}: ${path}`);
                 
-                currentFire.scale.set(scale, scale, scale);
-                currentFire.position.set(0, 0, 0); 
-                currentFire.position.y = -box.min.y * scale; 
-                
-                currentFire.traverse((child) => {
-                    if (child.isMesh) { child.castShadow = true; }
-                });
-                scene.add(currentFire);
-            }, undefined, (err) => {
-                console.error(`❌ Ошибка загрузки ${modelPath}:`, err);
-                // Если модель не загрузилась, показываем заглушку (куб)
-                if (!currentFire) {
-                    const geo = new THREE.BoxGeometry(2, 2, 2);
-                    const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
-                    currentFire = new THREE.Mesh(geo, mat);
-                    currentFire.position.y = 1;
+                try {
+                    const gltf = await new Promise((resolve, reject) => {
+                        loader.load(path, resolve, undefined, reject);
+                    });
+                    
+                    console.log(`✅ Успешно загружено с пути: ${path}`);
+                    currentFire = gltf.scene;
+                    
+                    // Настройка модели
+                    const box = new THREE.Box3().setFromObject(currentFire);
+                    const size = box.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    const scale = 2.5 / maxDim; 
+                    
+                    currentFire.scale.set(scale, scale, scale);
+                    currentFire.position.set(0, 0, 0); 
+                    currentFire.position.y = -box.min.y * scale; 
+                    
                     scene.add(currentFire);
+                    return; // Выходим, если успешно
+                    
+                } catch (err) {
+                    console.warn(`⚠️ Не удалось загрузить с ${path}:`, err);
+                    // Продолжаем цикл, пробуя следующий путь
                 }
-            });
+            }
+            
+            // Если все пути не сработали
+            console.error("❌ Все пути не сработали. Показываем заглушку.");
+            const geo = new THREE.BoxGeometry(2, 2, 2);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
+            currentFire = new THREE.Mesh(geo, mat);
+            currentFire.position.y = 1;
+            scene.add(currentFire);
         }
 
         function renderFriendsList() {
@@ -226,13 +212,8 @@
                 const div = document.createElement('div');
                 div.className = `friend-item ${index === currentFriendIndex ? 'active' : ''}`;
                 div.onclick = () => { currentFriendIndex = index; updateUI(); };
-                
-                // Красивая заглушка вместо аватарки
                 const char = f.name && f.name !== "ID:" ? f.name[1].toUpperCase() : "?";
-                div.innerHTML = `
-                    <div class="avatar-circle">${char}</div>
-                    <div class="profile-name">${f.name}</div>
-                `;
+                div.innerHTML = `<div class="avatar-circle">${char}</div><div class="profile-name">${f.name}</div>`;
                 row.appendChild(div);
             });
         }
@@ -255,38 +236,9 @@
             if (currentFire) {
                 const intersects = raycaster.intersectObject(currentFire, true);
                 if (intersects.length > 0) {
-                    totalTaps++;
-                    const phrases = ["Я тебя обожаю! ❤️", "Ты лучший! 🥰", "Спасибо! ✨", "Обнимаю! 🤗"];
-                    if (totalTaps % 3 === 0) {
-                        showMessage(phrases[Math.floor(Math.random() * phrases.length)]);
-                    }
-                    if (window.Telegram.WebApp) {
-                        window.Telegram.WebApp.sendData(JSON.stringify({ action: "tap", amount: 1 }));
-                    }
+                    showMessage("Я тебя обожаю! ❤️");
                 }
             }
-        });
-
-        window.toggleCatalog = () => {
-            const panel = document.getElementById('catalogPanel');
-            panel.style.bottom = panel.style.bottom === '0px' ? '-100%' : '0px';
-        };
-
-        const catalogList = document.getElementById('catalogItems');
-        [{name: "Обычный", file: "standart.glb"}, {name: "Зимний", file: "snow.glb"}].forEach(item => {
-            const btn = document.createElement('button');
-            btn.className = 'action-btn';
-            btn.style.background = '#3a3a5c';
-            btn.textContent = item.name;
-            btn.onclick = () => {
-                if(friendsData.length) {
-                    friendsData[currentFriendIndex].model = item.file.replace('.glb','');
-                    friendsData[currentFriendIndex].is_gray = false;
-                    updateUI();
-                    toggleCatalog();
-                }
-            };
-            catalogList.appendChild(btn);
         });
 
         loadData();
