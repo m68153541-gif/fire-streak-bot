@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
 import uvicorn
-import base64  # Для Base64 API
+import base64
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,14 +31,14 @@ TZ_EKB = ZoneInfo("Asia/Yekaterinburg")
 ADMIN_ID = 8513244807
 BOT_NAME = "🔥 Огонек"
 
-# Путь к папке с webapp
+# Жесткий путь к папке webapp
 WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
 
 USER_STATES = {}
 api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# CORS (Разрешаем запросы откуда угодно, чтобы Telegram WebView не блокировал)
+# CORS для всех запросов
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -256,16 +256,29 @@ async def sync_taps(request: Request):
     conn.commit(); conn.close()
     return {"status": "ok"}
 
-# --- Эндпоинт для загрузки 3D-моделей (Base64) ---
-
-@api_app.get("/api/model_base64/{model_name}")
-async def get_model_base64(model_name: str):
-    # Защита от скачивания левых файлов
+# --- Эндпоинт для загрузки 3D-моделей (Прямой файл) ---
+@api_app.get("/api/model/{model_name}")
+async def get_model_file(model_name: str):
     if ".." in model_name or "/" in model_name or "\\" in model_name:
         return JSONResponse(content={"error": "invalid name"}, status_code=400)
     
     file_path = os.path.join(WEBAPP_DIR, model_name)
+    if not os.path.exists(file_path):
+        logger.warning(f"Модель не найдена: {file_path}")
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     
+    response = FileResponse(file_path, media_type="model/gltf-binary")
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+# --- Эндпоинт для загрузки 3D-моделей (Base64) ---
+@api_app.get("/api/model_base64/{model_name}")
+async def get_model_base64(model_name: str):
+    if ".." in model_name or "/" in model_name or "\\" in model_name:
+        return JSONResponse(content={"error": "invalid name"}, status_code=400)
+    
+    file_path = os.path.join(WEBAPP_DIR, model_name)
     if not os.path.exists(file_path):
         logger.warning(f"Модель не найдена: {file_path}")
         return JSONResponse(content={"error": "not found"}, status_code=404)
@@ -485,7 +498,6 @@ application.add_error_handler(error_handler)
 
 # ==================== ЗАПУСК И СТАТИКА ====================
 
-# Вебхук для Telegram
 @api_app.post(f"/{TOKEN}")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -493,17 +505,14 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return Response(status_code=200)
 
-# Монтируем папку webapp
 if not os.path.exists(WEBAPP_DIR):
     logger.warning(f"⚠️ Папка {WEBAPP_DIR} не найдена! Модели не будут загружаться.")
 
 api_app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
-# Редирект с корня на index.html
 @api_app.get("/")
 async def root(): return FileResponse(os.path.join(WEBAPP_DIR, "index.html"))
 
-# События запуска и остановки FastAPI
 @api_app.on_event("startup")
 async def on_startup():
     init_db()
