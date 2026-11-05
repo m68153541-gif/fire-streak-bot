@@ -6,11 +6,10 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import random
 import uvicorn
-import asyncio
 
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
@@ -33,7 +32,7 @@ api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
 # ==================== БАЗА ДАННЫХ ====================
-
+# (Все функции базы остаются без изменений, я их не трогаю)
 def get_conn():
     url = DATABASE_URL
     if url.startswith("postgres://"):
@@ -260,9 +259,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
+# ИСПРАВЛЕННЫЙ СПИСОК КОМАНД
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "📋 <b>Команды:</b>\n\n/start - Инструкция\n/send - Пригласить друга\n/myfaier - Мои огоньки\n/l - Проверка\n/adm - Рассылка (админ)\n/add - Тест продления (админ)"
+    text = (
+        "📋 <b>Список команд:</b>\n\n"
+        "🔥 <code>/start</code> — Инструкция по запуску\n"
+        "📤 <code>/send</code> — Пригласить друга\n"
+        "👤 <code>/myfaier</code> — Мои огоньки\n"
+        "🔍 <code>/l</code> — Проверить подключение\n"
+        "⚙️ <code>/com</code> — Этот список\n"
+        "👑 <code>/adm</code> — Рассылка (только админ)\n"
+        "👑 <code>/add</code> — Тест продления (только админ)"
+    )
     await update.message.reply_text(text, parse_mode="HTML")
+
+# СКРЫТАЯ КОМАНДА /test
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    web_app_url = f"{URL}/webapp/index.html"
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Открыть Mini App", web_app=WebAppInfo(url=web_app_url))]
+    ])
+    await update.message.reply_text("Нажми кнопку ниже, чтобы открыть приложение:", reply_markup=keyboard)
 
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -530,6 +547,24 @@ async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}")
 
+# ==================== API ДЛЯ MINI APP ====================
+
+@api_app.get("/api/get_user_data")
+async def get_user_data(user_id: int):
+    """Отдает данные для веб-приложения: список всех серий пользователя"""
+    streaks = get_user_streaks(user_id)
+    result = []
+    for s in streaks:
+        partner_id = s["user_b"] if s["user_a"] == user_id else s["user_a"]
+        result.append({
+            "chat_id": s["chat_id"],
+            "partner_id": partner_id,
+            "streak": s["streak"],
+            "is_gray": s["is_gray"],
+            "model": s["connection_id_a"] # Заглушка, потом заменим на реальную модель из БД
+        })
+    return JSONResponse(content={"user_id": user_id, "streaks": result})
+
 # ==================== РЕГИСТРАЦИЯ ====================
 
 application.add_handler(CommandHandler("start", start))
@@ -540,6 +575,7 @@ application.add_handler(CommandHandler("adm", adm_command))
 application.add_handler(CommandHandler("send", send_invite_command))
 application.add_handler(CommandHandler("l", force_check))
 application.add_handler(CommandHandler("add", add_command))
+application.add_handler(CommandHandler("test", test_command)) # Скрытая команда
 
 application.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGE, handle_business_message))
 application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_admin_phrase))
