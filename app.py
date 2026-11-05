@@ -32,7 +32,7 @@ USER_STATES = {}
 api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# Разрешаем CORS для Mini App
+# CORS (чтобы модели грузились)
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -211,7 +211,7 @@ def kill_streak(chat_id):
     c.execute("DELETE FROM streaks WHERE chat_id = %s", (chat_id,))
     conn.commit(); conn.close()
 
-# ==================== API ДЛЯ MINI APP ====================
+# ==================== API ====================
 
 @api_app.get("/api/get_user_data")
 async def get_user_data(user_id: int):
@@ -224,10 +224,7 @@ async def get_user_data(user_id: int):
             chat = await application.bot.get_chat(partner_id)
             partner_name = f"@{chat.username}" if chat.username else chat.first_name
         except: pass
-        result.append({
-            "chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name,
-            "streak": s["streak"], "is_gray": s["is_gray"], "model": "standart"
-        })
+        result.append({"chat_id": s["chat_id"], "partner_id": partner_id, "name": partner_name, "streak": s["streak"], "is_gray": s["is_gray"], "model": "standart"})
     return JSONResponse(content={"streaks": result})
 
 @api_app.post("/api/sync_taps")
@@ -241,7 +238,7 @@ async def sync_taps(request: Request):
     conn.commit(); conn.close()
     return {"status": "ok"}
 
-# ==================== ХЕНДЛЕРЫ БОТА ====================
+# ==================== ХЕНДЛЕРЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -252,7 +249,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Я запомнил этот чат (ID: {chat_id}). Напиши /send.")
         except: pass
         return
-
     text = (
         f"🔥 <b>Привет, {user.first_name}!</b>\n\n"
         "1️⃣ <b>Подключи меня:</b> Настройки → Telegram Business → Чат-боты → @fier_zyzabot. Включи ВСЕ права.\n\n"
@@ -264,15 +260,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 async def com_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "📋 <b>Команды:</b>\n\n"
-        "🔥 /start — Инструкция\n"
-        "📤 /send — Пригласить друга\n"
-        "👤 /myfaier — Мои огоньки\n"
-        "🔍 /l — Проверить подключение\n"
-        "👑 /adm — Рассылка (админ)\n"
-        "👑 /add — Тест продления (админ)"
-    )
+    text = "📋 <b>Команды:</b>\n\n/start — Инструкция\n/send — Пригласить\n/myfaier — Мои огоньки\n/l — Проверка\n/adm — Рассылка (админ)\n/add — Тест (админ)"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,7 +271,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def myfaier_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     streaks = get_user_streaks(user.id)
-    if not streaks: return await update.message.reply_text("❌ У вас пока нет активных огоньков.")
+    if not streaks: return await update.message.reply_text("❌ Нет огоньков.")
     text = "🔥 <b>Ваши огоньки:</b>\n\n"
     for s in streaks:
         partner_id = s["user_b"] if s["user_a"] == user.id else s["user_a"]
@@ -299,13 +287,13 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streaks = get_all_streaks()
     text = "👑 <b>Все огоньки:</b>\n\n"
     for s in streaks:
-        text += f"{s['user_a']} ↔️ {s['user_b']} (Серия: {s['streak']})\n"
+        text += f"{s['user_a']} ↔️ {s['user_b']} ({s['streak']} дн.)\n"
     await update.message.reply_text(text[:4000], parse_mode="HTML")
 
 async def adm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return await update.message.reply_text("⛔ Нет прав.")
     USER_STATES[update.effective_user.id] = {"state": "waiting_admin_phrase"}
-    await update.message.reply_text("👑 Введите фразу для рассылки:")
+    await update.message.reply_text("👑 Введите фразу:")
 
 async def handle_admin_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -326,19 +314,17 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return await update.message.reply_text("⛔ Нет прав.")
     USER_STATES[update.effective_user.id] = {"state": "waiting_add_choice"}
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Всем", callback_data="add_all")], [InlineKeyboardButton("Только последнему", callback_data="add_last")]])
-    await update.message.reply_text("📢 Куда отправить тест?", reply_markup=keyboard)
+    await update.message.reply_text("📢 Куда отправить?", reply_markup=keyboard)
 
 async def handle_add_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+    query = update.callback_query; await query.answer(); data = query.data
     streaks = get_all_streaks()
     if not streaks: return await query.edit_message_text("❌ Нет чатов.")
     targets = streaks if data == "add_all" else [streaks[-1]]
     count = 0
     for s in targets:
         try:
-            await context.bot.send_message(chat_id=s["chat_id"], text="🔥 <b>День продлен!</b>\n\nНажмите кнопку:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]]), business_connection_id=s["connection_id_a"])
+            await context.bot.send_message(chat_id=s["chat_id"], text="🔥 <b>День продлен!</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]]), business_connection_id=s["connection_id_a"])
             count += 1
         except: pass
     await query.edit_message_text(f"✅ Отправлено в {count} чатов.")
@@ -348,7 +334,7 @@ async def send_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn_id = get_connection(user.id)
     peer_chat_id = get_peer_chat_id(user.id)
     if not conn_id: return await update.message.reply_text("❌ Бот не подключен.")
-    if not peer_chat_id: return await update.message.reply_text("❌ Сначала нажми кнопку бота в чате с другом.")
+    if not peer_chat_id: return await update.message.reply_text("❌ Нажми кнопку бота в чате с другом.")
     if get_streak(peer_chat_id): return await update.message.reply_text("🔥 Серия уже есть.")
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Принять", callback_data=f"acc_{user.id}_{peer_chat_id}")]])
     try:
@@ -413,16 +399,16 @@ async def check_midnight(context: ContextTypes.DEFAULT_TYPE):
         if s["is_gray"] == 1: continue
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
         try:
-            msg = await context.bot.send_message(chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>\n\nНажмите кнопку:", parse_mode="HTML", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
+            msg = await context.bot.send_message(chat_id=s["chat_id"], text="⚪ <b>Огонек стал серым.</b>", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
             set_gray(s["chat_id"], msg.message_id)
-        except Exception as e: logger.error(f"Failed midnight: {e}")
+        except: pass
 
 async def remind_gray(context: ContextTypes.DEFAULT_TYPE):
     for s in get_unsent_reminders():
         if not s["gray_since"]: continue
         if datetime.now(TZ_EKB) - datetime.fromisoformat(s["gray_since"]) > timedelta(days=7): kill_streak(s["chat_id"]); continue
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Поддержать", callback_data="keep_")]])
-        try: await context.bot.send_message(chat_id=s["chat_id"], text="⚪ Напоминание: огонек серый!", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
+        try: await context.bot.send_message(chat_id=s["chat_id"], text="⚪ Напоминание!", reply_markup=keyboard, business_connection_id=s["connection_id_a"])
         except: pass
 
 async def on_business_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -466,11 +452,12 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return Response(status_code=200)
 
-# Жесткий путь для раздачи файлов
-api_app.mount("/webapp", StaticFiles(directory="/opt/render/project/src/webapp", html=True), name="webapp")
+# Жесткий путь к webapp
+WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+api_app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
 @api_app.get("/")
-async def root(): return FileResponse("/opt/render/project/src/webapp/index.html")
+async def root(): return FileResponse(os.path.join(WEBAPP_DIR, "index.html"))
 
 @api_app.on_event("startup")
 async def on_startup():
