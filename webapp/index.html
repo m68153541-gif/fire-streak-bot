@@ -40,7 +40,6 @@
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
         
-        /* Стили для ошибки загрузки */
         .model-error { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; }
     </style>
 </head>
@@ -82,13 +81,13 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         
-        // Безопасный импорт Base64 (если файл model.js пуст или не экспортирует переменную)
+        // Безопасный импорт Base64
         let BASE64_MODEL = null;
         try {
             const module = await import('./model.js');
             BASE64_MODEL = module.BASE64_MODEL || null;
         } catch (e) {
-            console.log("model.js не найден или пуст, используем локальные файлы.");
+            console.log("model.js не найден или пуст, используем API.");
         }
 
         const tg = window.Telegram.WebApp;
@@ -129,10 +128,9 @@
         let currentFriendIndex = 0;
         const modelErrorEl = document.getElementById('modelError');
 
-        // Локальный путь к моделям (относительно index.html)
-        const LOCAL_BASE_URL = "./"; 
+        // Используем API для загрузки моделей, чтобы обойти CORS в Telegram WebView
+        const API_BASE_URL = "/api/model/"; 
 
-        // Функция для генерации цвета аватарки на основе ID
         function getAvatarColor(id) {
             const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8'];
             return colors[Math.abs(id) % colors.length];
@@ -145,12 +143,10 @@
                 
                 document.getElementById('myName').textContent = "@" + (tgUser.username || tgUser.first_name);
                 
-                // Безопасная установка аватарки
                 const avatarEl = document.getElementById('myAvatar');
                 if (tgUser.photo_url) {
                     avatarEl.innerHTML = `<img src="${tgUser.photo_url}" alt="Avatar">`;
                 } else {
-                    // Генерируем цветной фон и букву
                     avatarEl.style.backgroundColor = getAvatarColor(tgUser.id);
                     avatarEl.textContent = (tgUser.first_name || "U")[0].toUpperCase();
                 }
@@ -176,15 +172,14 @@
             renderFriendsList();
         }
 
-        function loadModel(fileName) {
-            // Очищаем сцену от предыдущей модели
+        async function loadModel(fileName) {
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
             }
-            modelErrorEl.style.display = 'none'; // Скрываем ошибку при новой попытке
+            modelErrorEl.style.display = 'none';
 
-            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка есть и не пустая)
+            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка есть)
             if (BASE64_MODEL && typeof BASE64_MODEL === 'string' && BASE64_MODEL.length > 100) {
                 console.log("Загрузка из Base64...");
                 try {
@@ -200,8 +195,7 @@
                         setupModel(gltf.scene);
                     }, (err) => {
                         console.error("❌ Ошибка парсинга Base64:", err);
-                        // Если Base64 не сработал, пробуем локальный файл
-                        loadFromLocal(fileName);
+                        loadFromApi(fileName); // Fallback
                     });
                     return;
                 } catch (e) {
@@ -209,26 +203,34 @@
                 }
             }
 
-            // 2. ГРУЗИМ ЛОКАЛЬНЫЙ ФАЙЛ
-            loadFromLocal(fileName);
+            // 2. ГРУЗИМ ЧЕРЕЗ API (ОБХОД CORS)
+            loadFromApi(fileName);
         }
 
-        function loadFromLocal(fileName) {
-            const url = `${LOCAL_BASE_URL}${fileName}`;
-            console.log("Попытка загрузить локально:", url);
+        async function loadFromApi(fileName) {
+            const url = `${API_BASE_URL}${fileName}`;
+            console.log("Попытка загрузить через API:", url);
 
-            loader.load(url, (gltf) => {
-                console.log("✅ Модель загружена локально!");
-                setupModel(gltf.scene);
-            }, undefined, (err) => {
-                console.error(`❌ Ошибка загрузки ${fileName}:`, err);
-                // Показываем ошибку пользователю
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const arrayBuffer = await response.arrayBuffer();
+                
+                loader.parse(arrayBuffer, '', (gltf) => {
+                    console.log("✅ Модель загружена через API!");
+                    setupModel(gltf.scene);
+                }, (err) => {
+                    console.error(`❌ Ошибка парсинга модели ${fileName}:`, err);
+                    modelErrorEl.textContent = `⚠️ Ошибка парсинга ${fileName}`;
+                    modelErrorEl.style.display = 'block';
+                });
+
+            } catch (err) {
+                console.error(`❌ Ошибка загрузки ${fileName} через API:`, err);
                 modelErrorEl.textContent = `⚠️ Не удалось загрузить ${fileName}. Проверьте консоль.`;
                 modelErrorEl.style.display = 'block';
-                
-                // Вместо куба просто ничего не показываем или показываем маленькую сферу-индикатор
-                // Но лучше просто оставить сцену пустой, чтобы не путать
-            });
+            }
         }
 
         function setupModel(model) {
@@ -243,7 +245,7 @@
             currentFire.position.y = -box.min.y * scale; 
             
             scene.add(currentFire);
-            modelErrorEl.style.display = 'none'; // Скрываем ошибку при успехе
+            modelErrorEl.style.display = 'none';
         }
 
         function renderFriendsList() {
@@ -254,7 +256,6 @@
                 div.className = `friend-item ${index === currentFriendIndex ? 'active' : ''}`;
                 div.onclick = () => { currentFriendIndex = index; updateUI(); };
                 
-                // Генерируем аватарку по ID, если нет имени
                 const char = f.name && f.name !== "ID:" ? f.name[1].toUpperCase() : "?";
                 const bgColor = getAvatarColor(f.partner_id || index);
                 
@@ -282,7 +283,7 @@
                 const intersects = raycaster.intersectObject(currentFire, true);
                 if (intersects.length > 0) {
                     showMessage("Я тебя обожаю! ❤️");
-                    // Здесь можно добавить вызов API для синхронизации тапов
+                    // Здесь можно добавить вызов API для синхронизации тапов, если нужно
                 }
             }
         });
