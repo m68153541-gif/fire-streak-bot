@@ -32,7 +32,7 @@ USER_STATES = {}
 api_app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
-# CORS (чтобы модели грузились)
+# CORS
 api_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -452,8 +452,11 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return Response(status_code=200)
 
-# Жесткий путь к webapp
-WEBAPP_DIR = os.path.join(os.path.dirname(__file__), "webapp")
+# === ЖЕСТКИЙ ПУТЬ К WEBAPP ===
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+if not os.path.exists(WEBAPP_DIR):
+    logger.warning(f"⚠️ Папка {WEBAPP_DIR} не найдена! Модели не будут загружаться.")
+
 api_app.mount("/webapp", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
 @api_app.get("/")
