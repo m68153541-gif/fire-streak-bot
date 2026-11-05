@@ -39,12 +39,16 @@
         
         .speech-bubble { position: absolute; top: 25%; left: 50%; transform: translateX(-50%) scale(0); background: white; color: #333; padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: 900; box-shadow: 0 10px 25px rgba(0,0,0,0.3); opacity: 0; transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events: none; z-index: 50; white-space: nowrap; }
         .speech-bubble.show { transform: translateX(-50%) scale(1); opacity: 1; }
+        
+        /* Стили для ошибки загрузки */
+        .model-error { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); color: #ff6b6b; font-size: 14px; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px; display: none; z-index: 100; pointer-events: none; text-align: center; }
     </style>
 </head>
 <body>
 
     <div class="ui-layer">
         <div class="speech-bubble" id="speechBubble"></div>
+        <div class="model-error" id="modelError">⚠️ Модель не загружена. Проверьте консоль.</div>
 
         <div class="top-bar">
             <div class="currency-panel">⭐ <span id="currencyCount">0</span></div>
@@ -77,8 +81,15 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        // Импортируем модель из отдельного файла
-        import { BASE64_MODEL } from './model.js';
+        
+        // Безопасный импорт Base64 (если файл model.js пуст или не экспортирует переменную)
+        let BASE64_MODEL = null;
+        try {
+            const module = await import('./model.js');
+            BASE64_MODEL = module.BASE64_MODEL || null;
+        } catch (e) {
+            console.log("model.js не найден или пуст, используем локальные файлы.");
+        }
 
         const tg = window.Telegram.WebApp;
         tg.ready();
@@ -116,9 +127,16 @@
         let currentFire = null;
         let friendsData = [];
         let currentFriendIndex = 0;
+        const modelErrorEl = document.getElementById('modelError');
 
-        // Резервная ссылка на jsDelivr (если Base64 не сработает)
-        const CDN_BASE_URL = "https://cdn.jsdelivr.net/gh/m68153541-gif/fire-streak-bot@main/webapp/";
+        // Локальный путь к моделям (относительно index.html)
+        const LOCAL_BASE_URL = "./"; 
+
+        // Функция для генерации цвета аватарки на основе ID
+        function getAvatarColor(id) {
+            const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8'];
+            return colors[Math.abs(id) % colors.length];
+        }
 
         async function loadData() {
             try {
@@ -126,10 +144,15 @@
                 const data = await res.json();
                 
                 document.getElementById('myName').textContent = "@" + (tgUser.username || tgUser.first_name);
+                
+                // Безопасная установка аватарки
+                const avatarEl = document.getElementById('myAvatar');
                 if (tgUser.photo_url) {
-                    document.getElementById('myAvatar').innerHTML = `<img src="${tgUser.photo_url}" alt="Avatar">`;
+                    avatarEl.innerHTML = `<img src="${tgUser.photo_url}" alt="Avatar">`;
                 } else {
-                    document.getElementById('myAvatar').textContent = (tgUser.first_name || "U")[0].toUpperCase();
+                    // Генерируем цветной фон и букву
+                    avatarEl.style.backgroundColor = getAvatarColor(tgUser.id);
+                    avatarEl.textContent = (tgUser.first_name || "U")[0].toUpperCase();
                 }
 
                 friendsData = data.streaks || [];
@@ -154,13 +177,15 @@
         }
 
         function loadModel(fileName) {
+            // Очищаем сцену от предыдущей модели
             if (currentFire) {
                 scene.remove(currentFire);
                 currentFire = null;
             }
+            modelErrorEl.style.display = 'none'; // Скрываем ошибку при новой попытке
 
-            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка вставлена)
-            if (BASE64_MODEL && BASE64_MODEL.length > 100) {
+            // 1. ПЫТАЕМСЯ ЗАГРУЗИТЬ ИЗ BASE64 (если строка есть и не пустая)
+            if (BASE64_MODEL && typeof BASE64_MODEL === 'string' && BASE64_MODEL.length > 100) {
                 console.log("Загрузка из Base64...");
                 try {
                     const binaryString = atob(BASE64_MODEL);
@@ -173,28 +198,36 @@
                     loader.parse(bytes.buffer, '', (gltf) => {
                         console.log("✅ Модель из Base64 загружена!");
                         setupModel(gltf.scene);
+                    }, (err) => {
+                        console.error("❌ Ошибка парсинга Base64:", err);
+                        // Если Base64 не сработал, пробуем локальный файл
+                        loadFromLocal(fileName);
                     });
-                    return; // Выходим, если Base64 сработал
+                    return;
                 } catch (e) {
-                    console.error("Ошибка Base64:", e);
+                    console.error("Ошибка декодирования Base64:", e);
                 }
             }
 
-            // 2. ЕСЛИ BASE64 ПУСТ, ГРУЗИМ С JSDELIVR
-            const url = `${CDN_BASE_URL}${fileName}`;
-            console.log("Попытка загрузить с CDN:", url);
+            // 2. ГРУЗИМ ЛОКАЛЬНЫЙ ФАЙЛ
+            loadFromLocal(fileName);
+        }
+
+        function loadFromLocal(fileName) {
+            const url = `${LOCAL_BASE_URL}${fileName}`;
+            console.log("Попытка загрузить локально:", url);
 
             loader.load(url, (gltf) => {
-                console.log("✅ Модель загружена с CDN!");
+                console.log("✅ Модель загружена локально!");
                 setupModel(gltf.scene);
             }, undefined, (err) => {
                 console.error(`❌ Ошибка загрузки ${fileName}:`, err);
-                // Куб-заглушка
-                const geo = new THREE.BoxGeometry(2, 2, 2);
-                const mat = new THREE.MeshStandardMaterial({ color: 0xff4500 });
-                currentFire = new THREE.Mesh(geo, mat);
-                currentFire.position.y = 1;
-                scene.add(currentFire);
+                // Показываем ошибку пользователю
+                modelErrorEl.textContent = `⚠️ Не удалось загрузить ${fileName}. Проверьте консоль.`;
+                modelErrorEl.style.display = 'block';
+                
+                // Вместо куба просто ничего не показываем или показываем маленькую сферу-индикатор
+                // Но лучше просто оставить сцену пустой, чтобы не путать
             });
         }
 
@@ -210,6 +243,7 @@
             currentFire.position.y = -box.min.y * scale; 
             
             scene.add(currentFire);
+            modelErrorEl.style.display = 'none'; // Скрываем ошибку при успехе
         }
 
         function renderFriendsList() {
@@ -219,8 +253,12 @@
                 const div = document.createElement('div');
                 div.className = `friend-item ${index === currentFriendIndex ? 'active' : ''}`;
                 div.onclick = () => { currentFriendIndex = index; updateUI(); };
+                
+                // Генерируем аватарку по ID, если нет имени
                 const char = f.name && f.name !== "ID:" ? f.name[1].toUpperCase() : "?";
-                div.innerHTML = `<div class="avatar-circle">${char}</div><div class="profile-name">${f.name}</div>`;
+                const bgColor = getAvatarColor(f.partner_id || index);
+                
+                div.innerHTML = `<div class="avatar-circle" style="background: ${bgColor};">${char}</div><div class="profile-name">${f.name}</div>`;
                 row.appendChild(div);
             });
         }
@@ -244,6 +282,7 @@
                 const intersects = raycaster.intersectObject(currentFire, true);
                 if (intersects.length > 0) {
                     showMessage("Я тебя обожаю! ❤️");
+                    // Здесь можно добавить вызов API для синхронизации тапов
                 }
             }
         });
